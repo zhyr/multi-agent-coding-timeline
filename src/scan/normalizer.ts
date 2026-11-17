@@ -95,6 +95,7 @@ export function normalizeRecord(record: AdapterRecord, ctx: NormalizeContext): A
     capture_level: record.capture_level,
     source_hash: ctx.sourceHash,
     confidence: ctx.matchConfidence === 'exact' ? 1 : ctx.matchConfidence === 'strong' ? 0.8 : 0.4,
+    import_identity_source: record.import_identity_source,
   };
 
   const contentHash = computeContentHash({

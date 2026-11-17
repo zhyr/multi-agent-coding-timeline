@@ -6,6 +6,12 @@ export interface DedupResult {
   duplicates: number;
   conflicts: ConflictRecord[];
   /**
+   * Imported Al-exporter events folded into a native event by the same agent,
+   * native session id and native message id. This is deterministic identity
+   * alignment, not an inference.
+   */
+  deterministic_pairs: number;
+  /**
    * Imported Al-exporter events that were folded into a native event by
    * session id + event type + time + content. This pairing is inferred: the
    * two records are not proven to be the same underlying row.
@@ -47,8 +53,12 @@ export function deduplicateEvents(
   input: readonly ActivityEvent[],
   inputTimelineIds: string[] = [],
 ): DedupResult {
+  // Deterministic pass first: an import row carrying the native message id is
+  // the same record as the native row with that id, so no content heuristic is
+  // involved. Removing it before grouping also avoids a false conflict variant.
+  const deterministic = foldDeterministicImports(input);
   const groups = new Map<string, ActivityEvent[]>();
-  for (const event of input) {
+  for (const event of deterministic.events) {
     const group = groups.get(event.dedup_key);
     if (group) group.push(event);
     else groups.set(event.dedup_key, [event]);
@@ -101,10 +111,89 @@ export function deduplicateEvents(
   const pairing = pairImportedEvents(kept);
   return {
     events: sortEvents(pairing.events),
-    duplicates: duplicates + pairing.inferredPairs,
+    duplicates: duplicates + deterministic.deterministicPairs + pairing.inferredPairs,
     conflicts,
+    deterministic_pairs: deterministic.deterministicPairs,
     inferred_pairs: pairing.inferredPairs,
   };
+}
+
+/** Identity tuple shared by native scans and 1.1.0 imports. */
+function nativeIdentityKey(event: ActivityEvent): string | undefined {
+  const agent = event.agent;
+  if (!agent?.agent_id || !agent.native_session_id || !agent.native_event_id) return undefined;
+  return [
+    event.project_id,
+    event.device_id,
+    agent.agent_id,
+    agent.native_session_id,
+    agent.native_event_id,
+  ].join('\u0000');
+}
+
+function isImportedEvent(event: ActivityEvent): boolean {
+  return event.provenance.capture_method === IMPORT_CAPTURE_METHOD;
+}
+
+/**
+ * Fold imported events whose `agent.native_event_id` came from
+ * `messages[].id`. The native and imported rows then share the exact identity
+ * tuple used by the `native_id` dedup tier, so the fold is deterministic.
+ * Rows that fell back to `session:<id>:L<line>` do not participate; they are
+ * handled by the inferred pairing pass or kept as independent events.
+ */
+function foldDeterministicImports(events: readonly ActivityEvent[]): {
+  events: ActivityEvent[];
+  deterministicPairs: number;
+} {
+  const imported = events.filter((event) => isImportedEvent(event));
+  if (imported.length === 0) return { events: [...events], deterministicPairs: 0 };
+
+  const nativeByIdentity = new Map<string, ActivityEvent>();
+  for (const event of events) {
+    if (isImportedEvent(event)) continue;
+    const key = nativeIdentityKey(event);
+    if (key && !nativeByIdentity.has(key)) nativeByIdentity.set(key, event);
+  }
+  if (nativeByIdentity.size === 0) return { events: [...events], deterministicPairs: 0 };
+
+  const consumed = new Set<ActivityEvent>();
+  const importIdByNative = new Map<string, string>();
+  for (const event of imported) {
+    if (event.provenance.import_identity_source !== 'message_id') continue;
+    const key = nativeIdentityKey(event);
+    if (!key) continue;
+    const native = nativeByIdentity.get(key);
+    if (!native) continue;
+    nativeByIdentity.delete(key);
+    consumed.add(event);
+    importIdByNative.set(native.event_id, event.event_id);
+  }
+  if (consumed.size === 0) return { events: [...events], deterministicPairs: 0 };
+
+  const output: ActivityEvent[] = [];
+  for (const event of events) {
+    if (consumed.has(event)) continue;
+    const importId = importIdByNative.get(event.event_id);
+    if (!importId) {
+      output.push(event);
+      continue;
+    }
+    const note =
+      `deterministic pairing with Al-exporter import ${importId}: same agent, ` +
+      'native session id and native message id';
+    output.push({
+      ...event,
+      correlation: event.correlation
+        ? {
+            ...event.correlation,
+            note: event.correlation.note ? `${event.correlation.note}; ${note}` : note,
+          }
+        : { kind: 'strongly_supported', match_confidence: 'exact', note },
+      provenance: { ...event.provenance, paired_import_event_id: importId },
+    });
+  }
+  return { events: output, deterministicPairs: consumed.size };
 }
 
 /**
@@ -149,7 +238,7 @@ function pairImportedEvents(events: ActivityEvent[]): { events: ActivityEvent[];
     if (key && !nativeByKey.has(key)) nativeByKey.set(key, event);
   }
 
-  const consumed = new Set<string>();
+  const consumed = new Set<ActivityEvent>();
   const paired = new Map<string, string>();
   for (const event of imported) {
     const key = pairingFingerprint(event);
@@ -157,7 +246,7 @@ function pairImportedEvents(events: ActivityEvent[]): { events: ActivityEvent[];
     const native = nativeByKey.get(key);
     if (!native) continue;
     nativeByKey.delete(key);
-    consumed.add(event.event_id);
+    consumed.add(event);
     paired.set(native.event_id, event.event_id);
   }
   if (paired.size === 0) return { events, inferredPairs: 0 };
@@ -165,7 +254,7 @@ function pairImportedEvents(events: ActivityEvent[]): { events: ActivityEvent[];
   const output: ActivityEvent[] = [];
   for (const event of events) {
     if (event.provenance.capture_method === IMPORT_CAPTURE_METHOD) {
-      if (!consumed.has(event.event_id)) output.push(event);
+      if (!consumed.has(event)) output.push(event);
       continue;
     }
     const importId = paired.get(event.event_id);

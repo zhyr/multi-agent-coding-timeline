@@ -8,7 +8,7 @@ import { computeDeviceId, computeSessionId, computeTimelineId } from '../core/id
 import { FULL_EXPORT_WARNING } from '../core/redaction.js';
 import { expandHome, nowIso } from '../adapters/util.js';
 import { createAdapters, selectAdapters } from '../adapters/registry.js';
-import type { AgentAdapter, SessionReference } from '../adapters/types.js';
+import type { AgentAdapter, DeclaredSourceDevice, SessionReference } from '../adapters/types.js';
 import { buildProjectIdentity } from '../project/identity.js';
 import { matchSessionToProject } from '../project/resolver.js';
 import { scanGit } from '../git/scanner.js';
@@ -168,12 +168,70 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
 
   const scannerDeviceId =
     options.scannerDevice ?? computeDeviceId(undefined, `scanner:${hostname()}:${platform()}`);
-  if (remoteMode && !options.sourceDevice) {
+
+  // ---- Source discovery ----
+  // Discovery runs before project identity because an imported archive may
+  // declare the source device itself (Al-exporter manifest.device).
+  const adapters = selectAdapters(options.agents, options.adapters ?? createAdapters());
+  const discoverOptions = sourceRoot ? { roots: [sourceRoot] } : {};
+  const usable: Array<{ adapter: AgentAdapter; source: Awaited<ReturnType<AgentAdapter['discoverSources']>>[number] }> = [];
+  const discoveryErrors: string[] = [];
+  let unknownLayouts = 0;
+  for (const adapter of adapters) {
+    let found;
+    try {
+      found = await adapter.discoverSources(discoverOptions);
+    } catch (error) {
+      discoveryErrors.push(`${adapter.id} discovery failed: ${errorMessage(error)}`);
+      continue;
+    }
+    for (const source of found) {
+      if (!source.readable) {
+        discoveryErrors.push(`${adapter.id}: source not readable: ${source.display_path}`);
+        continue;
+      }
+      if (source.metadata?.matched_layout === false) {
+        unknownLayouts += 1;
+        continue;
+      }
+      usable.push({ adapter, source });
+    }
+  }
+
+  // Archive-declared device identity. The scanner hostname is never used for a
+  // remote source; an explicit --source-device always wins and conflicts are
+  // reported instead of silently overridden.
+  const declaredDevices = new Map<string, DeclaredSourceDevice>();
+  const deviceWarnings: string[] = [];
+  for (const { adapter, source } of usable) {
+    if (!adapter.declaredSourceDevice) continue;
+    try {
+      const declared = await adapter.declaredSourceDevice(source);
+      if (declared) declaredDevices.set(declared.device_id, declared);
+    } catch (error) {
+      deviceWarnings.push(`${adapter.id}: device declaration unreadable (${errorMessage(error)})`);
+    }
+  }
+  if (!options.sourceDevice && declaredDevices.size > 1) {
     throw new UsageError(
-      'Remote source scan requires --source-device. The scanner hostname must never be used to infer the source device identity.',
+      `Source roots declare conflicting source devices (${[...declaredDevices.keys()].join(', ')}). Supply --source-device to choose one explicitly.`,
     );
   }
-  const sourceDeviceId = options.sourceDevice ?? scannerDeviceId;
+  const declaredDevice = declaredDevices.size === 1 ? [...declaredDevices.values()][0] : undefined;
+
+  let sourceDeviceId: string;
+  if (options.sourceDevice) {
+    sourceDeviceId = options.sourceDevice;
+  } else if (declaredDevice) {
+    sourceDeviceId = declaredDevice.device_id;
+  } else if (remoteMode) {
+    throw new UsageError(
+      'Remote source scan requires --source-device, or an archive that declares device.source_device_id. The scanner hostname must never be used to infer the source device identity.',
+    );
+  } else {
+    sourceDeviceId = scannerDeviceId;
+  }
+
   progress(`Project: ${displayPath(projectPath)}`);
   progress(`Source device: ${sourceDeviceId} | Scanner device: ${scannerDeviceId}`);
 
@@ -186,6 +244,31 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
   const projectId = identity.project.project_id;
   const repositoryId = identity.project.repositories[0]?.repository_id;
   const report = emptyReport(projectId, sourceDeviceId, scannerDeviceId, startedAt);
+  for (const message of discoveryErrors) {
+    report.sources_failed += 1;
+    report.errors.push(message);
+  }
+  report.warnings.push(...deviceWarnings);
+  const basis = declaredDevice?.basis ? ` (basis: ${declaredDevice.basis})` : '';
+  if (declaredDevice && !options.sourceDevice) {
+    report.warnings.push(
+      `Source device adopted from the archive declaration ${declaredDevice.source}: ${declaredDevice.device_id}${basis}. Pass --source-device to override it explicitly.`,
+    );
+  } else if (declaredDevice && options.sourceDevice) {
+    if (options.sourceDevice === declaredDevice.device_id) {
+      report.warnings.push(
+        `--source-device matches the archive declaration ${declaredDevice.source}: ${declaredDevice.device_id}${basis}.`,
+      );
+    } else {
+      report.warnings.push(
+        `Device conflict: the archive declares ${declaredDevice.device_id}${basis} in ${declaredDevice.source}, but --source-device ${options.sourceDevice} was supplied. The explicit CLI value wins; imported events are attributed to ${options.sourceDevice}.`,
+      );
+    }
+  } else if (declaredDevices.size > 1) {
+    report.warnings.push(
+      `Source roots declare multiple devices (${[...declaredDevices.keys()].join(', ')}); --source-device ${options.sourceDevice} was applied to all of them.`,
+    );
+  }
   if (!identity.project.identity_strong) {
     report.warnings.push(
       'Project identity is name-derived (no git remote and no root commit). Cross-device merge will require explicit confirmation.',
@@ -225,33 +308,6 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
     }
   }
 
-  // ---- Source discovery ----
-  const adapters = selectAdapters(options.agents, options.adapters ?? createAdapters());
-  const discoverOptions = sourceRoot ? { roots: [sourceRoot] } : {};
-  const usable: Array<{ adapter: AgentAdapter; source: Awaited<ReturnType<AgentAdapter['discoverSources']>>[number] }> = [];
-  let unknownLayouts = 0;
-  for (const adapter of adapters) {
-    let found;
-    try {
-      found = await adapter.discoverSources(discoverOptions);
-    } catch (error) {
-      report.sources_failed += 1;
-      report.errors.push(`${adapter.id} discovery failed: ${errorMessage(error)}`);
-      continue;
-    }
-    for (const source of found) {
-      if (!source.readable) {
-        report.sources_failed += 1;
-        report.errors.push(`${adapter.id}: source not readable: ${source.display_path}`);
-        continue;
-      }
-      if (source.metadata?.matched_layout === false) {
-        unknownLayouts += 1;
-        continue;
-      }
-      usable.push({ adapter, source });
-    }
-  }
   report.sources_discovered = usable.length;
   if (unknownLayouts > 0) {
     report.warnings.push(`${unknownLayouts} source root(s) had no recognizable agent layout and were skipped`);
@@ -487,6 +543,11 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
   // ---- Deterministic dedup, relations and ordering ----
   const dedup = deduplicateEvents(allEvents);
   const events = dedup.events;
+  if (dedup.deterministic_pairs > 0) {
+    progress(
+      `${dedup.deterministic_pairs} imported Al-exporter event(s) folded deterministically by native session id + message id`,
+    );
+  }
   if (dedup.inferred_pairs > 0) {
     report.warnings.push(
       `${dedup.inferred_pairs} imported Al-exporter event(s) were paired with native records by session id, type, time and content; the pairing is inferred, not a confirmed identical record`,

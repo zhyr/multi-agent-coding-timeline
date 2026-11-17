@@ -29,6 +29,8 @@ export interface AdapterCapabilities {
   git_correlation: CapabilityLevel;
   formats: string[];
   verification: VerificationStatus;
+  /** Per-source interop details (for example an Al-exporter interop.json capability matrix). */
+  interop?: Record<string, unknown>;
   notes: string[];
 }
 
@@ -67,6 +69,15 @@ export interface SessionReference {
   metadata?: Record<string, unknown>;
 }
 
+/** Device identity declared by an archive itself (for example a remote export). */
+export interface DeclaredSourceDevice {
+  device_id: string;
+  basis?: string;
+  hostname?: string;
+  /** Where the declaration came from, e.g. manifest.device. */
+  source: string;
+}
+
 export type CaptureLevel = 'observed' | 'derived' | 'reported' | 'unknown';
 export type TimestampPrecision = 'millisecond' | 'second' | 'minute' | 'unknown';
 
@@ -103,6 +114,8 @@ export interface AdapterRecord {
   agent_override?: { id: string; name?: string; version?: string };
   /** Import adapters: original record behind a derived artifact (two-hop provenance). */
   raw_payload_ref?: string;
+  /** Import adapters: which source field produced native_event_id. */
+  import_identity_source?: 'message_id' | 'session_line' | 'message_index';
 }
 
 export interface ParseIssue {
@@ -139,6 +152,11 @@ export interface AgentAdapter {
   scanSessions(source: AgentSource): Promise<SessionReference[]>;
   parseSession(session: SessionReference): Promise<ParseResult>;
   getCapabilities(): AdapterCapabilities;
+  /**
+   * Optional archive-level device declaration. Used only when discovery was
+   * explicit; the engine decides how it interacts with --source-device.
+   */
+  declaredSourceDevice?(source: AgentSource): Promise<DeclaredSourceDevice | undefined>;
 }
 
 export function makeCapabilities(

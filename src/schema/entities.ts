@@ -81,6 +81,12 @@ export const ActivityEventSchema = obj({
      * event is not shipped; the pairing is not a confirmed identical record.
      */
     paired_import_event_id: z.string().optional(),
+    /**
+     * Import adapters only: which source field produced agent.native_event_id.
+     * `message_id` enables deterministic dedup; `session_line` / `message_index`
+     * are stable identities but cannot match a native row id by themselves.
+     */
+    import_identity_source: z.enum(['message_id', 'session_line', 'message_index']).optional(),
   }),
 
   /** Evidence is separate from factual content: an inference is never a verified fact. */

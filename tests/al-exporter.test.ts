@@ -17,7 +17,18 @@ interface ExportFile {
   symlinkTo?: string;
 }
 
-async function writeExport(root: string, files: ExportFile[], exporterVersion = '2.0.0'): Promise<void> {
+interface ExportOptions {
+  schemaVersion?: string;
+  device?: Record<string, unknown>;
+  interop?: unknown;
+}
+
+async function writeExport(
+  root: string,
+  files: ExportFile[],
+  exporterVersion = '2.0.0',
+  options: ExportOptions = {},
+): Promise<void> {
   await mkdir(root, { recursive: true });
   const items = [];
   for (const [index, entry] of files.entries()) {
@@ -35,21 +46,29 @@ async function writeExport(root: string, files: ExportFile[], exporterVersion = 
       file: entry.file,
     });
   }
-  await writeFile(
-    path.join(root, 'manifest.json'),
-    JSON.stringify(
-      {
-        exporter_version: exporterVersion,
-        schema_version: '1.0.0',
-        exported_at: '2026-11-17T00:00:00.000Z',
-        sources_seen: [...new Set(items.map((i) => i.source))],
-        items,
-      },
-      null,
-      2,
-    ),
-    'utf8',
-  );
+  const schemaVersion = options.schemaVersion ?? '1.0.0';
+  const manifest: Record<string, unknown> = {
+    exporter_version: exporterVersion,
+    schema_version: schemaVersion,
+    exported_at: '2026-11-17T00:00:00.000Z',
+    sources_seen: [...new Set(items.map((i) => i.source))],
+    items,
+  };
+  if (options.device) manifest.device = options.device;
+  if (options.interop !== undefined && schemaVersion === '1.1.0') {
+    manifest.contract = {
+      name: 'al-exporter-interop',
+      version: '1.0.0',
+      schema_version: '1.1.0',
+      capabilities: 'interop.json',
+    };
+    await writeFile(
+      path.join(root, 'interop.json'),
+      typeof options.interop === 'string' ? options.interop : JSON.stringify(options.interop, null, 2),
+      'utf8',
+    );
+  }
+  await writeFile(path.join(root, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
 }
 
 function thread(options: {
@@ -511,6 +530,329 @@ describe('Al-exporter import adapter', () => {
     expect(lone.events).toHaveLength(1);
     expect(lone.events[0]!.provenance.capture_method).toBe('adapter:al-exporter');
     expect(lone.inferred_pairs).toBe(0);
+  });
+
+  it('consumes 1.1.0 session/device/tool_call fields and message ids', async () => {
+    const nativeId = '74d80a47-d27c-4006-857f-e9c044edd5a9';
+    const record = {
+      schema_version: '1.1.0',
+      thread_id: '5ed26a2b5e6e8947',
+      type: 'thread',
+      messages: [
+        { role: 'user', content: 'hi', timestamp: '2026-11-17T01:00:00.000Z', id: 'evt-1', id_source: 'event.id', line: 3 },
+        {
+          role: 'assistant',
+          content: '[Tool Use] Bash\n{"command":"ls"}',
+          timestamp: '2026-11-17T01:00:05.000Z',
+          id: 'evt-2',
+          id_source: 'event.id',
+          line: 4,
+          tool_call: { name: 'Bash', status: null, call_id: 'call-1', phase: 'call' },
+        },
+        {
+          role: 'user',
+          content: '[Tool Result] ok',
+          timestamp: '2026-11-17T01:00:06.000Z',
+          id: 'evt-3',
+          id_source: 'event.id',
+          line: 4,
+          tool_call: { name: 'Bash', status: 'completed', call_id: 'call-1', phase: 'result' },
+        },
+        { role: 'assistant', content: 'no id, same line', line: 4 },
+        { role: 'assistant', content: 'no id, no line' },
+      ],
+      meta: {
+        source: 'workbuddy',
+        project: 'Users-alice-work-fixture-project',
+        created_at: '2000-01-01T00:00:00.000Z',
+        file_path: `/Users/alice/.workbuddy/projects/Users-alice-work-fixture-project/${nativeId}.jsonl`,
+        extra: { project_directory: '/should/not/be/used' },
+      },
+      session: {
+        native_id: nativeId,
+        native_id_kind: 'uuid',
+        native_id_source: 'file.basename',
+        cwd: '/Users/alice/work/fixture-project',
+        cwd_source: 'workbuddy.record',
+        git_remote: 'https://github.com/example/fixture-project.git',
+        git_remote_source: 'cwd_git_config',
+        agent_version: '1.2.3',
+      },
+      device: {
+        source_device_id: 'dev_archive',
+        source_device_id_basis: 'export_host',
+        source_hostname: 'fixture-host',
+        collector_device_id: 'dev_archive',
+        collector_hostname: 'fixture-host',
+        collector_platform: 'darwin',
+      },
+    };
+    await writeExport(
+      root,
+      [{ file: 'workbuddy/thread-0.json', source: 'workbuddy', threadId: 'tx-1', record }],
+      '2.3.0',
+      {
+        schemaVersion: '1.1.0',
+        device: record.device,
+        interop: {
+          contract: 'al-exporter-interop',
+          contract_version: '1.0.0',
+          schema_version: '1.1.0',
+          records_total: 1,
+          messages_total: 5,
+          capabilities: { native_session_id: 'full', tool_call_name: 'full', tool_call_status: 'partial' },
+          fields: {
+            'session.native_id': { schema_present: true, applicable: 1, non_empty: 1, status: 'full' },
+            'session.agent_version': { schema_present: true, applicable: 1, non_empty: 0, empty: 1, status: 'empty' },
+            'messages[].id': { schema_present: true, applicable: 5, non_empty: 3, empty: 2, status: 'partial' },
+          },
+        },
+      },
+    );
+
+    const { adapter, sessions } = await loadSessions(root);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]!.native_session_id).toBe(nativeId);
+    expect(sessions[0]!.metadata?.al_exporter_session_id_source).toBe('session.native_id');
+    expect(sessions[0]!.project_evidence.cwd).toBe('/Users/alice/work/fixture-project');
+    expect(sessions[0]!.project_evidence.gitRemote).toBe('https://github.com/example/fixture-project.git');
+    expect(sessions[0]!.project_evidence.metadata).toMatchObject({
+      cwd_source: 'workbuddy.record',
+      git_remote_source: 'cwd_git_config',
+    });
+    // A 1.1.0 session block wins; the 1.0.0 extra.project_directory is not used.
+    expect(sessions[0]!.project_evidence.cwd).not.toBe('/should/not/be/used');
+
+    const declared = await adapter.declaredSourceDevice(sessions[0]!.source);
+    expect(declared).toMatchObject({ device_id: 'dev_archive', basis: 'export_host', source: 'manifest.device' });
+
+    const parsed = await adapter.parseSession(sessions[0]!);
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.records.map((r) => r.native_event_id)).toEqual([
+      'evt-1',
+      'evt-2',
+      'evt-3',
+      `session:${nativeId}:L4`,
+      `${nativeId}:m4`,
+    ]);
+    expect(parsed.records.map((r) => r.import_identity_source)).toEqual([
+      'message_id',
+      'message_id',
+      'message_id',
+      'session_line',
+      'message_index',
+    ]);
+    expect(parsed.records[1]).toMatchObject({
+      event_type: 'agent.tool.started',
+      tool_name: 'Bash',
+      tool_call_id: 'call-1',
+    });
+    // status: null means "not recorded"; it is never turned into success/failure.
+    expect(parsed.records[1]!.execution_status).toBeUndefined();
+    expect(parsed.records[2]).toMatchObject({
+      event_type: 'agent.tool.completed',
+      execution_status: 'completed',
+      tool_call_id: 'call-1',
+    });
+    expect(parsed.records[0]!.agent_override?.version).toBe('1.2.3');
+    expect(parsed.project_evidence?.gitRemote).toBe('https://github.com/example/fixture-project.git');
+
+    const capabilities = adapter.getCapabilities();
+    expect(capabilities.interop).toMatchObject({ schema_version: '1.1.0', records_total: 1 });
+    expect(capabilities.notes.join(' ')).toMatch(/session\.agent_version=0\/1 non-empty \(empty\)/);
+    expect(capabilities.tool_calls).toBe('verified');
+  });
+
+  it('distinguishes absent interop fields from empty ones', async () => {
+    await writeExport(
+      root,
+      [{ file: 'workbuddy/thread-0.json', source: 'workbuddy', record: thread({ source: 'workbuddy' }) }],
+      '2.3.0',
+      {
+        schemaVersion: '1.1.0',
+        interop: {
+          contract: 'al-exporter-interop',
+          schema_version: '1.1.0',
+          capabilities: {
+            session_cwd: 'empty',
+            git_remote: 'absent',
+            message_timestamp: 'empty',
+            tool_call_name: 'empty',
+          },
+          fields: {
+            'session.cwd': { schema_present: true, applicable: 1, non_empty: 0, empty: 1, status: 'empty' },
+            'messages[].tool_call.name': {
+              schema_present: true,
+              applicable: 2,
+              non_empty: 0,
+              empty: 2,
+              status: 'empty',
+            },
+          },
+          known_gaps: ['fixture: schema present but no data'],
+        },
+      },
+    );
+    const { adapter } = await loadSessions(root);
+    const capabilities = adapter.getCapabilities();
+    // Schema presence alone never upgrades a capability.
+    expect(capabilities.tool_calls).toBe('unavailable');
+    expect(capabilities.timestamps).toBe('unavailable');
+    expect(capabilities.project_identity).toBe('unavailable');
+    expect(capabilities.notes.join(' ')).toMatch(/messages\[\]\.tool_call\.name=0\/2 non-empty \(empty\)/);
+    expect(capabilities.notes.join(' ')).toMatch(/git_remote=absent/);
+    expect(capabilities.interop).toMatchObject({
+      fields: { 'session.cwd': { schema_present: true, status: 'empty', non_empty: 0 } },
+    });
+
+    // 1.0.0 has no interop.json: absent and empty cannot be distinguished.
+    const legacyRoot = path.join(root, 'legacy');
+    await writeExport(legacyRoot, [{ file: 'codex/thread-0.json', record: thread() }]);
+    const legacy = new AlExporterAdapter();
+    const legacySource = (await legacy.discoverSources({ roots: [legacyRoot] })).find(
+      (s) => s.metadata?.matched_layout === true,
+    )!;
+    await legacy.scanSessions(legacySource);
+    expect(legacy.getCapabilities().interop).toBeUndefined();
+    expect(legacy.getCapabilities().notes.join(' ')).toMatch(/No interop\.json/);
+  });
+
+  it('adopts the archive device, reports conflicts and lets --source-device win', async () => {
+    const projectPath = path.join(root, 'project');
+    await createGitRepo(projectPath, { remote: 'https://github.com/example/device-project.git', commits: 1 });
+    const exportRoot = path.join(root, 'export');
+    const record = {
+      schema_version: '1.1.0',
+      thread_id: 'tx-device',
+      type: 'thread',
+      messages: [{ role: 'user', content: 'device fixture', timestamp: '2026-11-17T05:00:00.000Z', id: 'evt-d' }],
+      meta: {
+        source: 'workbuddy',
+        file_path: '/Users/alice/.workbuddy/projects/x/sess-device.jsonl',
+      },
+      session: {
+        native_id: 'sess-device',
+        cwd: projectPath,
+        cwd_source: 'workbuddy.record',
+        git_remote: 'https://github.com/example/device-project.git',
+        git_remote_source: 'cwd_git_config',
+      },
+      device: { source_device_id: 'dev_archive', source_device_id_basis: 'export_host' },
+    };
+    await writeExport(
+      exportRoot,
+      [{ file: 'workbuddy/thread-0.json', source: 'workbuddy', threadId: 'tx-device', record }],
+      '2.3.0',
+      { schemaVersion: '1.1.0', device: record.device, interop: { schema_version: '1.1.0', capabilities: {}, fields: {} } },
+    );
+
+    const adopted = await runScan({
+      project: projectPath,
+      output: path.join(root, 'adopted.ai-timeline'),
+      sourceRoot: exportRoot,
+      agents: ['al-exporter'],
+    });
+    expect(adopted.sourceDeviceId).toBe('dev_archive');
+    expect(adopted.data.events.some((e) => e.agent?.agent_id === 'workbuddy')).toBe(true);
+    expect(adopted.data.scanReport.warnings.join(' ')).toMatch(/adopted from the archive declaration manifest\.device/);
+
+    const conflict = await runScan({
+      project: projectPath,
+      output: path.join(root, 'conflict.ai-timeline'),
+      sourceRoot: exportRoot,
+      sourceDevice: 'device-a',
+      agents: ['al-exporter'],
+    });
+    expect(conflict.sourceDeviceId).toBe('device-a');
+    expect(conflict.data.scanReport.warnings.join(' ')).toMatch(
+      /Device conflict: .*dev_archive.*--source-device device-a/,
+    );
+
+    const matching = await runScan({
+      project: projectPath,
+      output: path.join(root, 'matching.ai-timeline'),
+      sourceRoot: exportRoot,
+      sourceDevice: 'dev_archive',
+      agents: ['al-exporter'],
+    });
+    expect(matching.data.scanReport.warnings.join(' ')).toMatch(/matches the archive declaration/);
+  });
+
+  it('folds matched message ids deterministically and labels fallback identities as inferred', () => {
+    const native = makeEvent({
+      dedup_key: 'dedup:native:cursor:s1:evt-1',
+      dedup_tier: 'native_id',
+      event_type: 'agent.response.received',
+      project_id: 'proj_align',
+      device_id: 'device-a',
+      agent: { agent_id: 'cursor', agent_name: 'Cursor', native_session_id: 's1', native_event_id: 'evt-1' },
+      activity: { role: 'assistant', content: 'same row' },
+      time: { occurred_at: '2026-11-17T01:00:00.000Z', observed_at: '2026-11-17T00:00:01.000Z' },
+      provenance: {
+        source_type: 'agent-session',
+        source_path: 'cursor/s1.jsonl',
+        source_path_identity: 'cursor/s1.jsonl',
+        source_record_id: 'line:3',
+        capture_method: 'adapter:cursor',
+        capture_level: 'observed',
+      },
+      parser: { adapter_id: 'cursor', adapter_version: '1.0.0', parser_version: '1.0.0', schema_version: '1.0.0' },
+    });
+    const imported = makeEvent({
+      dedup_key: 'dedup:native:cursor:s1:evt-1',
+      dedup_tier: 'native_id',
+      event_type: 'agent.response.received',
+      project_id: 'proj_align',
+      device_id: 'device-a',
+      agent: { agent_id: 'cursor', agent_name: 'Cursor', native_session_id: 's1', native_event_id: 'evt-1' },
+      activity: { role: 'assistant', content: 'same row' },
+      time: { occurred_at: '2026-11-17T01:00:00.000Z', observed_at: '2026-11-17T00:00:01.000Z' },
+      provenance: {
+        source_type: 'agent-session',
+        source_path: 'export/cursor/s1.json',
+        source_path_identity: 'al-exporter/cursor/s1.json',
+        source_record_id: 'message:evt-1',
+        capture_method: 'adapter:al-exporter',
+        capture_level: 'derived',
+        import_identity_source: 'message_id',
+      },
+      parser: { adapter_id: 'al-exporter', adapter_version: '1.1.0', parser_version: '1.1.0', schema_version: '1.0.0' },
+    });
+
+    const deterministic = deduplicateEvents([native, imported]);
+    expect(deterministic.events).toHaveLength(1);
+    expect(deterministic.deterministic_pairs).toBe(1);
+    expect(deterministic.inferred_pairs).toBe(0);
+    expect(deterministic.events[0]!.provenance.capture_method).toBe('adapter:cursor');
+    expect(deterministic.events[0]!.provenance.paired_import_event_id).toBeTruthy();
+    expect(deterministic.events[0]!.correlation?.note).toMatch(/deterministic pairing/);
+    expect(deterministic.events[0]!.correlation?.match_confidence).toBe('exact');
+
+    // 1.0.0 / no-message-id rows keep the inferred path and are labelled as such.
+    const fallback = makeEvent({
+      dedup_key: 'dedup:native:cursor:s1:session:s1:L3',
+      event_type: 'agent.response.received',
+      project_id: 'proj_align',
+      device_id: 'device-a',
+      agent: { agent_id: 'cursor', agent_name: 'Cursor', native_session_id: 's1', native_event_id: 'session:s1:L3' },
+      activity: { role: 'assistant', content: 'same row' },
+      time: { occurred_at: '2026-11-17T01:00:00.000Z', observed_at: '2026-11-17T00:00:01.000Z' },
+      provenance: {
+        source_type: 'agent-session',
+        source_path: 'export/cursor/s1.json',
+        source_path_identity: 'al-exporter/cursor/s1.json',
+        source_record_id: 'message:L3',
+        capture_method: 'adapter:al-exporter',
+        capture_level: 'derived',
+        import_identity_source: 'session_line',
+      },
+      parser: { adapter_id: 'al-exporter', adapter_version: '1.1.0', parser_version: '1.1.0', schema_version: '1.0.0' },
+    });
+    const inferred = deduplicateEvents([native, fallback]);
+    expect(inferred.events).toHaveLength(1);
+    expect(inferred.deterministic_pairs).toBe(0);
+    expect(inferred.inferred_pairs).toBe(1);
+    expect(inferred.events[0]!.correlation?.note).toMatch(/inferred pairing/);
   });
 
   it('rejects an invalid manifest and reports it as a source failure', async () => {

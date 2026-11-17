@@ -8,6 +8,8 @@ import {
   type AdapterRecord,
   type AgentAdapter,
   type AgentSource,
+  type CapabilityLevel,
+  type DeclaredSourceDevice,
   type DiscoverOptions,
   type ParseIssue,
   type ParseResult,
@@ -18,11 +20,18 @@ import {
 /**
  * Import adapter for Al-exporter archives (`agent-backup/`).
  *
- * Al-exporter is a sibling tool that exports agent conversations as one JSON
- * file per thread plus a `manifest.json`. It is not an agent-native layout, so
- * this adapter is intentionally explicit-root only: discovery requires both an
- * explicit `--source-root` and a `manifest.json` marker. It never scans default
+ * Al-exporter exports agent conversations as one JSON file per thread plus a
+ * `manifest.json`. It is not an agent-native layout, so this adapter is
+ * intentionally explicit-root only: discovery requires both an explicit
+ * `--source-root` and a `manifest.json` marker. It never scans default
  * home-directory locations.
+ *
+ * Schema 1.0.0 and 1.1.0 are both supported:
+ *   1.1.0 adds the `session{}` / `device{}` blocks, message `id` / `line` /
+ *   `tool_call{}`, an `interop.json` capability manifest and a `contract`
+ *   pointer in `manifest.json`.
+ *   1.0.0 has none of these; every 1.1.0-only field is then treated as absent,
+ *   never as an empty string.
  *
  * The archive is a derived artifact. Two-hop provenance is preserved:
  *   provenance.source_path -> the Al-exporter JSON file
@@ -69,14 +78,45 @@ interface AlManifestItem {
   [key: string]: unknown;
 }
 
-interface AlManifest {
-  items: AlManifestItem[];
-  exporterVersion?: string;
+interface AlDevice {
+  id: string;
+  basis?: string;
+  hostname?: string;
+  collectorId?: string;
+  collectorHostname?: string;
+  collectorPlatform?: string;
+}
+
+interface InteropField {
+  schema_present?: boolean;
+  applicable?: number;
+  non_empty?: number;
+  empty?: number;
+  status?: string;
+  notes?: string;
+}
+
+interface AlInterop {
+  contract?: string;
+  contract_version?: string;
+  schema_version?: string;
+  exporter_version?: string;
+  records_total?: number;
+  messages_total?: number;
+  device?: AlDevice;
+  fields?: Record<string, InteropField>;
+  capabilities?: Record<string, string>;
+  known_gaps?: string[];
 }
 
 interface ManifestCacheEntry {
   items: AlManifestItem[];
   exporterVersion?: string;
+  schemaVersion?: string;
+  contract?: Record<string, unknown>;
+  device?: AlDevice;
+  interop?: AlInterop;
+  interopError?: string;
 }
 
 interface AlThreadMeta {
@@ -87,12 +127,35 @@ interface AlThreadMessage {
   [key: string]: unknown;
 }
 
+/** Identity fields read from one export file. All of them are optional in 1.0.0. */
+interface ThreadIdentity {
+  source?: string;
+  filePath?: string;
+  schemaVersion?: string;
+  hasSessionBlock: boolean;
+  nativeId?: string;
+  nativeIdKind?: string;
+  nativeIdSource?: string;
+  cwd?: string;
+  cwdSource?: string;
+  gitRemote?: string;
+  gitRemoteSource?: string;
+  agentVersion?: string;
+  device?: AlDevice;
+  /** 1.0.0 only: WorkBuddy project directory recorded outside the session block. */
+  projectDirectory?: string;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function normalizeManifestPath(file: string): string | undefined {
@@ -108,6 +171,20 @@ function safeNativeId(value: unknown, fallback: string): string {
   return cleaned || fallback.replace(/[^A-Za-z0-9._:-]+/g, '-') || 'thread';
 }
 
+function readDevice(value: unknown): AlDevice | undefined {
+  if (!isRecord(value)) return undefined;
+  const id = asString(value.source_device_id);
+  if (!id) return undefined;
+  return {
+    id,
+    basis: asString(value.source_device_id_basis),
+    hostname: asString(value.source_hostname),
+    collectorId: asString(value.collector_device_id),
+    collectorHostname: asString(value.collector_hostname),
+    collectorPlatform: asString(value.collector_platform),
+  };
+}
+
 function upstreamAgent(source: string | undefined, filePath: string | undefined): { id: string; name: string } {
   // Al-exporter aliases OpenCode into its Codex source. Recover the distinction
   // from the original file path so OpenCode history is not relabelled as Codex.
@@ -121,11 +198,11 @@ function upstreamAgent(source: string | undefined, filePath: string | undefined)
 
 /**
  * Recover the agent-native session id from the original file recorded in
- * `meta.file_path`. Al-exporter's own `thread_id` is
- * `sha1(file_path + "\0" + session_id)[0..16]` and never equals a native id;
- * `meta.extra.session_id` is absent from every record in the observed archive.
- * The path is therefore the only bridge to the native session identity.
+ * `meta.file_path`. This is the 1.0.0 path only: 1.1.0 exports declare
+ * `session.native_id` and never need a path-derived id.
  *
+ * Al-exporter's own `thread_id` is
+ * `sha1(file_path + "\0" + session_id)[0..16]` and never equals a native id.
  * Only layouts that the native adapters themselves discover are accepted, so a
  * recovered id is comparable with `native_session_id` from a native scan.
  */
@@ -155,56 +232,127 @@ function recoverOriginalSessionId(agentId: string, filePath: string | undefined)
   return undefined;
 }
 
+function identityFromDocument(document: Record<string, unknown>): ThreadIdentity {
+  const meta = isRecord(document.meta) ? (document.meta as AlThreadMeta) : {};
+  const session = isRecord(document.session) ? document.session : undefined;
+  const extra = isRecord(meta.extra) ? meta.extra : {};
+  const hasSessionBlock = session !== undefined;
+  return {
+    source: asString(meta.source),
+    filePath: asString(meta.file_path),
+    schemaVersion: asString(document.schema_version),
+    projectDirectory: hasSessionBlock ? undefined : asString(extra.project_directory),
+    hasSessionBlock,
+    ...(session
+      ? {
+          nativeId: asString(session.native_id),
+          nativeIdKind: asString(session.native_id_kind),
+          nativeIdSource: asString(session.native_id_source),
+          cwd: asString(session.cwd),
+          cwdSource: asString(session.cwd_source),
+          gitRemote: asString(session.git_remote),
+          gitRemoteSource: asString(session.git_remote_source),
+          agentVersion: asString(session.agent_version),
+        }
+      : {}),
+    device: readDevice(document.device),
+  };
+}
+
 /** Read only the identity fields needed to align a thread with a native session. */
-async function readThreadIdentity(file: string): Promise<{ source?: string; filePath?: string } | undefined> {
+async function readThreadIdentity(file: string): Promise<ThreadIdentity | undefined> {
   try {
     const document = JSON.parse(await readFile(file, 'utf8')) as unknown;
-    if (!isRecord(document)) return undefined;
-    const meta = isRecord(document.meta) ? document.meta : {};
-    return { source: asString(meta.source), filePath: asString(meta.file_path) };
+    return isRecord(document) ? identityFromDocument(document) : undefined;
   } catch {
     return undefined;
   }
 }
 
 /**
- * Project evidence is deliberately narrow:
- *  1. WorkBuddy is the only source that records a real cwd (`extra.project_directory`).
- *  2. Otherwise, decode the agent-native project directory that may survive in
- *     `meta.file_path` (Claude Code, Qoder, Cursor transcripts).
- * `meta.project` is a path heuristic in Al-exporter (e.g. "10", "examples") and is
- * never used.
+ * Project evidence.
+ *
+ * 1.1.0: `session.cwd` / `session.git_remote` are real ProjectEvidence. A null
+ * value means the source did not record it, so no legacy field is substituted.
+ * The declaration source is carried in `metadata` so the resolver output stays
+ * explainable.
+ *
+ * 1.0.0 (no session block): WorkBuddy is the only source with a real cwd
+ * (`extra.project_directory`); otherwise the agent-native project directory is
+ * decoded from `meta.file_path` as a path hint. `meta.project` is a path
+ * heuristic in Al-exporter (e.g. "10", "examples") and is never used.
  */
-function projectEvidenceFromThread(meta: AlThreadMeta, sourceName: string | undefined): ProjectEvidence {
-  const extra = isRecord(meta.extra) ? meta.extra : {};
-  // Only WorkBuddy records a real cwd; do not trust a same-named field elsewhere.
-  const cwd = sourceName === 'workbuddy' ? asString(extra.project_directory) : undefined;
-  const filePath = asString(meta.file_path);
+function projectEvidenceFromThread(
+  identity: ThreadIdentity,
+  sourceName: string | undefined,
+): ProjectEvidence {
   const hints: string[] = [];
+  const metadata: Record<string, string> = {};
+  let cwd: string | undefined;
+  let gitRemote: string | undefined;
+
+  if (identity.hasSessionBlock) {
+    if (identity.cwd) {
+      cwd = identity.cwd;
+      metadata.cwd_source = identity.cwdSource ?? 'session.cwd';
+    }
+    if (identity.gitRemote) {
+      gitRemote = identity.gitRemote;
+      metadata.git_remote_source = identity.gitRemoteSource ?? 'session.git_remote';
+    }
+  } else if (sourceName === 'workbuddy') {
+    cwd = identity.projectDirectory;
+    if (cwd) metadata.cwd_source = 'workbuddy.extra.project_directory (1.0.0 fallback)';
+  }
+
   if (cwd) hints.push(cwd);
-  if (filePath) {
-    const normalized = filePath.replace(/\\/g, '/');
+  if (identity.filePath) {
+    const normalized = identity.filePath.replace(/\\/g, '/');
     for (const pattern of [
       /\/\.claude\/projects\/([^/]+)\//,
       /\/\.qoder\/projects\/([^/]+)\//,
       /\/\.cursor\/projects\/([^/]+)\//,
     ]) {
       const match = normalized.match(pattern);
-      if (match?.[1]) hints.push(decodeProjectPath(match[1]));
+      if (match?.[1]) {
+        hints.push(decodeProjectPath(match[1]));
+        metadata.project_path_hint_source = identity.hasSessionBlock
+          ? 'decoded meta.file_path (heuristic; no native cwd declared)'
+          : 'decoded meta.file_path (1.0.0 fallback)';
+      }
     }
   }
+
   return {
     ...(cwd ? { cwd } : {}),
+    ...(gitRemote ? { gitRemote } : {}),
     ...(hints.length > 0 ? { projectPathHints: [...new Set(hints)] } : {}),
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
   };
+}
+
+function capabilityFromStatus(status: string | undefined): CapabilityLevel {
+  if (status === 'full') return 'verified';
+  if (status === 'partial') return 'partial';
+  // empty / absent / not_applicable / unknown: the schema may exist, but the
+  // archive carries no data for it.
+  return 'unavailable';
+}
+
+function interopFieldSummary(interop: AlInterop | undefined, name: string): string {
+  const field = interop?.fields?.[name];
+  if (!field) return `${name}=absent`;
+  const ratio = `${field.non_empty ?? 0}/${field.applicable ?? 0}`;
+  return `${name}=${ratio} non-empty (${field.status ?? 'unknown'})`;
 }
 
 export class AlExporterAdapter implements AgentAdapter {
   readonly id = 'al-exporter';
   readonly name = 'Al-exporter archive';
-  readonly version = '1.0.0';
+  readonly version = '1.1.0';
 
   private readonly manifests = new Map<string, ManifestCacheEntry>();
+  private lastInterop?: AlInterop;
 
   async discoverSources(options: DiscoverOptions = {}): Promise<AgentSource[]> {
     return discoverSources(SPEC, options);
@@ -223,12 +371,73 @@ export class AlExporterAdapter implements AgentAdapter {
     if (!isRecord(raw) || !Array.isArray(raw.items)) {
       throw new Error(`invalid Al-exporter manifest at ${file}: missing items[]`);
     }
+    const contract = isRecord(raw.contract) ? raw.contract : undefined;
+    const interop = await this.readInterop(root, contract);
+    if (interop.interop) this.lastInterop = interop.interop;
     const entry: ManifestCacheEntry = {
       items: raw.items.filter(isRecord) as AlManifestItem[],
       exporterVersion: asString(raw.exporter_version),
+      schemaVersion: asString(raw.schema_version),
+      contract,
+      device: readDevice(raw.device),
+      ...interop,
     };
     this.manifests.set(root, entry);
     return entry;
+  }
+
+  private async readInterop(
+    root: string,
+    contract: Record<string, unknown> | undefined,
+  ): Promise<{ interop?: AlInterop; interopError?: string }> {
+    const declared = asString(contract?.capabilities) ?? 'interop.json';
+    const relative = normalizeManifestPath(declared);
+    if (!relative) return { interopError: `unsafe interop path in manifest contract: ${declared}` };
+    const file = path.resolve(root, relative);
+    if (file !== root && !file.startsWith(root + path.sep)) {
+      return { interopError: `interop path escapes the archive root: ${declared}` };
+    }
+    try {
+      const raw = JSON.parse(await readFile(file, 'utf8')) as unknown;
+      if (!isRecord(raw)) return { interopError: 'interop.json is not a JSON object' };
+      return {
+        interop: {
+          contract: asString(raw.contract),
+          contract_version: asString(raw.contract_version),
+          schema_version: asString(raw.schema_version),
+          exporter_version: asString(raw.exporter_version),
+          records_total: asNumber(raw.records_total),
+          messages_total: asNumber(raw.messages_total),
+          device: readDevice(raw.device),
+          fields: isRecord(raw.fields) ? (raw.fields as Record<string, InteropField>) : undefined,
+          capabilities: isRecord(raw.capabilities)
+            ? (raw.capabilities as Record<string, string>)
+            : undefined,
+          known_gaps: Array.isArray(raw.known_gaps)
+            ? raw.known_gaps.filter((g): g is string => typeof g === 'string')
+            : undefined,
+        },
+      };
+    } catch (error) {
+      // A 1.0.0 archive has no interop.json at all: that is "absent", not an error.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return contract ? { interopError: `manifest contract declares ${declared}, but the file is missing` } : {};
+      }
+      return { interopError: `interop.json unreadable: ${(error as Error).message}` };
+    }
+  }
+
+  async declaredSourceDevice(source: AgentSource): Promise<DeclaredSourceDevice | undefined> {
+    if (!source.readable) return undefined;
+    const manifest = await this.manifest(source.root);
+    const device = manifest.device ?? manifest.interop?.device;
+    if (!device) return undefined;
+    return {
+      device_id: device.id,
+      basis: device.basis,
+      hostname: device.hostname,
+      source: manifest.device ? 'manifest.device' : 'interop.device',
+    };
   }
 
   async scanSessions(source: AgentSource): Promise<SessionReference[]> {
@@ -239,7 +448,9 @@ export class AlExporterAdapter implements AgentAdapter {
     const usedIds = new Set<string>();
     let missing = 0;
     let skippedSymlinks = 0;
+    let fromSession = 0;
     let recoveredIds = 0;
+    let fallbackIds = 0;
 
     for (let index = 0; index < manifest.items.length; index += 1) {
       const item = manifest.items[index]!;
@@ -266,13 +477,27 @@ export class AlExporterAdapter implements AgentAdapter {
       const identity = await readThreadIdentity(absolute);
       const sourceName = identity?.source ?? asString(item.source);
       const agent = upstreamAgent(sourceName, identity?.filePath);
-      const recoveredId = recoverOriginalSessionId(agent.id, identity?.filePath);
-      if (recoveredId) recoveredIds += 1;
+      const declaredId = identity?.nativeId;
+      const recoveredId = declaredId ? undefined : recoverOriginalSessionId(agent.id, identity?.filePath);
+      const idSource = declaredId
+        ? 'session.native_id'
+        : recoveredId
+          ? 'meta.file_path'
+          : 'manifest.thread_id';
+      if (declaredId) fromSession += 1;
+      else if (recoveredId) recoveredIds += 1;
+      else fallbackIds += 1;
 
-      const baseId = safeNativeId(recoveredId ?? item.thread_id, path.basename(relative, path.extname(relative)));
+      const baseId = safeNativeId(
+        declaredId ?? recoveredId ?? item.thread_id,
+        path.basename(relative, path.extname(relative)),
+      );
       let nativeId = baseId;
       if (usedIds.has(nativeId)) nativeId = `${baseId}#${index}`;
       usedIds.add(nativeId);
+
+      const evidence = projectEvidenceFromThread(identity ?? { hasSessionBlock: false }, sourceName);
+      const recordDevice = identity?.device;
 
       sessions.push({
         native_session_id: nativeId,
@@ -281,13 +506,20 @@ export class AlExporterAdapter implements AgentAdapter {
         relative_path: relative,
         size_bytes: info.size,
         modified_at: info.mtime.toISOString(),
-        project_evidence: {},
+        project_evidence: evidence,
         metadata: {
           skipped_symlinks: skippedSymlinks,
           al_exporter_source: sourceName,
           al_exporter_thread_id: asString(item.thread_id),
           al_exporter_original_session_id: recoveredId,
-          al_exporter_session_id_source: recoveredId ? 'meta.file_path' : 'manifest.thread_id',
+          al_exporter_session_id_source: idSource,
+          al_exporter_native_id_kind: identity?.nativeIdKind,
+          al_exporter_native_id_origin: identity?.nativeIdSource,
+          al_exporter_schema_version: identity?.schemaVersion ?? manifest.schemaVersion,
+          al_exporter_cwd_source: evidence.metadata?.cwd_source,
+          al_exporter_git_remote_source: evidence.metadata?.git_remote_source,
+          al_exporter_agent_version: identity?.agentVersion,
+          al_exporter_record_device_id: recordDevice?.id,
           al_exporter_agent: agent.id,
           al_exporter_hash: asString(item.hash),
           al_exporter_sha256: asString(item.sha256),
@@ -302,7 +534,14 @@ export class AlExporterAdapter implements AgentAdapter {
       manifest_items: manifest.items.length,
       missing_items: missing,
       skipped_symlinks: skippedSymlinks,
+      native_ids_from_session: fromSession,
       native_session_ids_recovered: recoveredIds,
+      native_ids_fallback: fallbackIds,
+      schema_version: manifest.schemaVersion,
+      contract_version: asString(manifest.contract?.version),
+      interop_present: !!manifest.interop,
+      ...(manifest.interopError ? { interop_error: manifest.interopError } : {}),
+      ...(manifest.device ? { declared_device_id: manifest.device.id } : {}),
     };
     sessions.sort((a, b) => a.relative_path.localeCompare(b.relative_path));
     return sessions;
@@ -325,16 +564,15 @@ export class AlExporterAdapter implements AgentAdapter {
       return { records: [], issues, truncated: read.truncated };
     }
 
-    const meta = isRecord(document.meta) ? (document.meta as AlThreadMeta) : {};
-    const filePath = asString(meta.file_path);
-    const sourceName = asString(meta.source) ?? asString(session.metadata?.al_exporter_source);
-    const evidence = projectEvidenceFromThread(meta, sourceName);
-    const agent = upstreamAgent(sourceName, filePath);
+    const identity = identityFromDocument(document);
+    const sourceName = identity.source ?? asString(session.metadata?.al_exporter_source);
+    const evidence = projectEvidenceFromThread(identity, sourceName);
+    const agent = upstreamAgent(sourceName, identity.filePath);
     const exporterVersion = asString(session.metadata?.al_exporter_version);
     const agentOverride = {
       id: agent.id,
       name: agent.name,
-      version: exporterVersion ? `al-exporter-${exporterVersion}` : undefined,
+      version: identity.agentVersion ?? (exporterVersion ? `al-exporter-${exporterVersion}` : undefined),
     };
     const threadId = asString(document.thread_id) ?? session.native_session_id;
 
@@ -349,6 +587,7 @@ export class AlExporterAdapter implements AgentAdapter {
     let started: string | undefined;
     let ended: string | undefined;
     let model: string | undefined;
+    const identityCounts = new Map<string, number>();
 
     for (let index = 0; index < messages.length; index += 1) {
       const message = messages[index];
@@ -372,24 +611,63 @@ export class AlExporterAdapter implements AgentAdapter {
       const metaKind = asString(messageMeta.kind);
       const metaName = asString(messageMeta.name);
       const toolMatch = role === 'assistant' ? content.match(TOOL_USE_PREFIX) : null;
-      const isToolUse = metaKind === 'tool_use' || toolMatch !== null;
-      const isToolResult = metaKind === 'tool_result';
+      const toolCall = isRecord(typed.tool_call) ? typed.tool_call : undefined;
+      const toolPhase = asString(toolCall?.phase);
+      const toolStatus = asString(toolCall?.status);
+      const toolCallId = asString(toolCall?.call_id);
+
+      const isToolUse = toolPhase === 'call' || metaKind === 'tool_use' || toolMatch !== null;
+      const isToolResult = toolPhase === 'result' || metaKind === 'tool_result';
+      const isToolError = toolPhase === 'error' || (isToolResult && /^(failed|error)$/i.test(toolStatus ?? ''));
 
       let eventType: string;
       let toolName: string | undefined;
-      if (isToolUse) {
+      if (isToolUse && !isToolError) {
         eventType = 'agent.tool.started';
-        toolName = metaName ?? toolMatch?.[1]?.trim();
+        toolName = asString(toolCall?.name) ?? metaName ?? toolMatch?.[1]?.trim();
+      } else if (isToolError) {
+        eventType = 'agent.tool.failed';
+        toolName = asString(toolCall?.name) ?? metaName;
       } else if (isToolResult) {
         eventType = 'agent.tool.completed';
-        toolName = metaName;
+        toolName = asString(toolCall?.name) ?? metaName;
       } else if (role === 'user') {
         eventType = 'agent.user_request.submitted';
       } else if (role === 'assistant') {
         eventType = 'agent.response.received';
+      } else if (role === 'tool') {
+        eventType = 'agent.tool.completed';
+        toolName = asString(toolCall?.name) ?? metaName;
       } else {
         eventType = 'agent.message.recorded';
       }
+
+      // Message identity: prefer the source message id. Without one, fall back
+      // to `session:<native_id>:L<line>`. Several messages can share one source
+      // line (block-level export), so a `#n` suffix keeps the identity unique.
+      const rawId = asString(typed.id);
+      const lineNumber = asNumber(typed.line);
+      let identityBase: string;
+      let identitySource: 'message_id' | 'session_line' | 'message_index';
+      if (rawId) {
+        identityBase = rawId;
+        identitySource = 'message_id';
+      } else if (lineNumber !== undefined) {
+        identityBase = `session:${session.native_session_id}:L${lineNumber}`;
+        identitySource = 'session_line';
+      } else {
+        identityBase = `${session.native_session_id}:m${index}`;
+        identitySource = 'message_index';
+      }
+      const seen = (identityCounts.get(identityBase) ?? 0) + 1;
+      identityCounts.set(identityBase, seen);
+      const nativeEventId = seen === 1 ? identityBase : `${identityBase}#${seen}`;
+      const sourceRecordId =
+        identitySource === 'message_id'
+          ? `message:${rawId}`
+          : identitySource === 'session_line'
+            ? `message:L${lineNumber}`
+            : `message:${index}`;
 
       let occurredAt: string | undefined;
       let precision: AdapterRecord['timestamp_precision'];
@@ -410,24 +688,32 @@ export class AlExporterAdapter implements AgentAdapter {
 
       records.push({
         event_type: eventType,
-        native_event_id: `${session.native_session_id}:m${index}`,
+        native_event_id: nativeEventId,
         occurred_at: occurredAt,
         timestamp_precision: precision,
         role,
         content,
         tool_name: toolName,
+        tool_call_id: toolCallId,
+        // A null tool status means "not recorded". It is never inferred from
+        // the presence of a result, and never turned into success/failure.
+        execution_status: toolStatus,
         model: messageModel,
         evidence_level: 'agent_reported',
         capture_level: 'derived',
-        source_record_id: `message:${index}`,
+        source_record_id: seen === 1 ? sourceRecordId : `${sourceRecordId}#${seen}`,
         sequence,
         agent_override: agentOverride,
-        raw_payload_ref: filePath,
+        raw_payload_ref: identity.filePath,
+        import_identity_source: identitySource,
         metadata: {
           al_exporter_source: sourceName,
           al_exporter_thread_id: threadId,
+          al_exporter_schema_version: identity.schemaVersion,
           al_exporter_type: asString(document.type),
           original_role: role,
+          ...(lineNumber !== undefined ? { al_exporter_message_line: lineNumber } : {}),
+          ...(toolPhase ? { al_exporter_tool_phase: toolPhase } : {}),
           ...(metaKind ? { original_meta_kind: metaKind } : {}),
         },
       });
@@ -446,34 +732,94 @@ export class AlExporterAdapter implements AgentAdapter {
   }
 
   getCapabilities(): AdapterCapabilities {
+    const interop = this.lastInterop;
+    const status = (name: string): string | undefined =>
+      interop?.capabilities?.[name] ?? interop?.fields?.[`messages[].${name}`]?.status;
+
+    const projectStatus =
+      interop?.capabilities?.session_cwd && interop.capabilities.session_cwd === 'full'
+        ? 'full'
+        : interop?.capabilities?.git_remote ?? interop?.capabilities?.session_cwd;
+    const notes = [
+      'Explicit --source-root only; requires manifest.json and never scans default home directories.',
+      'Supports Al-exporter schema 1.0.0 and 1.1.0. 1.0.0 has no session/device blocks; those fields are treated as absent, never as empty strings.',
+      '1.1.0 session.native_id is authoritative. meta.file_path recovery is the 1.0.0 fallback only; manifest.thread_id is the last resort.',
+      'Message events use messages[].id when present; otherwise session:<native_id>:L<line> (with a #n suffix when several messages share a line).',
+      'Two-hop provenance: source_path is the export file, raw_payload_ref is the original agent file from meta.file_path.',
+      'meta.created_at is a file mtime and is never used as occurred_at; only messages[].timestamp is authoritative.',
+      'meta.project is a path heuristic (observed values include "10" and "examples") and is ignored.',
+      'Project evidence (1.1.0): session.cwd and session.git_remote are real evidence and their declaration source is kept in evidence.metadata. 1.0.0 falls back to WorkBuddy extra.project_directory and file_path hints.',
+      'device.source_device_id is declared by the archive; the engine adopts it only when --source-device is absent, and reports a conflict when both differ.',
+      'Al-exporter aliases OpenCode into Codex; the original .opencode path is used to restore the opencode agent id.',
+      'Structured tool_call drives tool events. A null status stays unknown; success or failure is never inferred.',
+      'Imported events use the original agent id via agent_override, but session records still belong to the al-exporter adapter.',
+      'Deterministic dedup: same agent + native session id + native message id. Inferred pairing (session id + type + time + content) remains for 1.0.0 and for rows without message ids.',
+      'No Git commits/pushes exist in the archive, so this adapter never produces verified Git evidence.',
+    ];
+    if (interop) {
+      notes.push(
+        [
+          'interop.json capability matrix (non-empty / applicable):',
+          interopFieldSummary(interop, 'session.native_id'),
+          interopFieldSummary(interop, 'session.cwd'),
+          interopFieldSummary(interop, 'session.git_remote'),
+          interopFieldSummary(interop, 'session.agent_version'),
+          interopFieldSummary(interop, 'messages[].id'),
+          interopFieldSummary(interop, 'messages[].line'),
+          interopFieldSummary(interop, 'messages[].timestamp'),
+          interopFieldSummary(interop, 'messages[].tool_call.name'),
+          interopFieldSummary(interop, 'messages[].tool_call.status'),
+          interopFieldSummary(interop, 'messages[].tool_call.call_id'),
+        ].join(' '),
+      );
+      if (interop.known_gaps?.length) notes.push(`interop known gaps: ${interop.known_gaps.join(' ')}`);
+    } else {
+      notes.push(
+        'No interop.json in this archive (schema 1.0.0 or a stripped export): absent and empty cannot be distinguished; capabilities fall back to observed 1.0.0 behaviour.',
+      );
+    }
+
     return makeCapabilities({
       discovery: 'verified',
       session_listing: 'verified',
       user_request: 'partial',
       agent_response: 'partial',
-      tool_calls: 'partial',
+      tool_calls: interop ? capabilityFromStatus(status('tool_call_name')) : 'partial',
       task_status: 'unavailable',
       file_changes: 'unavailable',
-      project_identity: 'partial',
-      timestamps: 'partial',
+      project_identity: interop ? capabilityFromStatus(projectStatus) : 'partial',
+      timestamps: interop ? capabilityFromStatus(interop.capabilities?.message_timestamp) : 'partial',
       incremental_scan: 'verified',
       git_correlation: 'unavailable',
-      formats: ['json', 'al-exporter-manifest'],
+      formats: ['json', 'al-exporter-manifest', 'al-exporter-interop'],
       verification: 'partially_verified',
-      notes: [
-        'Explicit --source-root only; requires manifest.json and never scans default home directories.',
-        'Each manifest item maps to one thread JSON; messages become events with agent_reported + derived evidence.',
-        'Two-hop provenance: source_path is the export file, raw_payload_ref is the original agent file from meta.file_path.',
-        'meta.created_at is a file mtime and is never used as occurred_at; only messages[].timestamp is authoritative.',
-        'meta.project is a path heuristic (observed values include "10" and "examples") and is ignored.',
-        'Project evidence: WorkBuddy extra.project_directory, then decoded Claude/Qoder/Cursor project directories from meta.file_path.',
-        'Al-exporter aliases OpenCode into Codex; the original .opencode path is used to restore the opencode agent id.',
-        'Tool calls are recovered only from [Tool Use] text or message meta.kind; no execution status or file changes exist.',
-        'Imported events use the original agent id via agent_override, but session records still belong to the al-exporter adapter.',
-        'The native session id is recovered from meta.file_path for native layouts; other records keep the Al-exporter thread id and cannot be aligned.',
-        'An imported event is folded into a native event only on an exact agent + session id + type + time + content match, and the fold is marked inferred.',
-        'No Git commits/pushes exist in the archive, so this adapter never produces verified Git evidence.',
-      ],
+      ...(interop
+        ? {
+            interop: {
+              contract: interop.contract,
+              contract_version: interop.contract_version,
+              schema_version: interop.schema_version,
+              exporter_version: interop.exporter_version,
+              records_total: interop.records_total,
+              messages_total: interop.messages_total,
+              capabilities: interop.capabilities,
+              fields: Object.fromEntries(
+                Object.entries(interop.fields ?? {}).map(([name, field]) => [
+                  name,
+                  {
+                    schema_present: field.schema_present,
+                    applicable: field.applicable,
+                    non_empty: field.non_empty,
+                    empty: field.empty,
+                    status: field.status,
+                  },
+                ]),
+              ),
+              known_gaps: interop.known_gaps,
+            },
+          }
+        : {}),
+      notes,
     });
   }
 }

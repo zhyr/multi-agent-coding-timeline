@@ -164,7 +164,7 @@ Every event carries `evidence.level` — `verified`, `agent_reported`, `inferred
 | `codebuddy` | discovery only | 0 | directory observed, no verified session format |
 | `zcode` | not testable | 0 | no local installation |
 | `opencode` | partially verified | 1 | `project/session/message/part` JSON; text parts only, no tool parts observed |
-| `al-exporter` | partially verified | 3,321 | import only: requires explicit `--source-root` + `manifest.json`; no cwd/remote/Git data |
+| `al-exporter` | partially verified | 3,321 + 3 | import only: explicit `--source-root` + `manifest.json`; schema 1.0.0 and 1.1.0; 1.1.0 adds session cwd/remote, message ids and a declared device |
 
 Details and per-field capability levels: [docs/agent-adapters.md](docs/agent-adapters.md).
 
@@ -208,13 +208,22 @@ performed separately, read-only, and is documented with counts in
   and file-change records have not been observed.
 - Al-exporter archives are import-only: a thread's `meta.project` is a path heuristic and is
   ignored, `meta.created_at` is a file mtime and is never used as event time, and imported
-  events are `agent_reported`/`derived` with no Git evidence. The native session id is
-  recovered from `meta.file_path` when the path matches a layout a native adapter discovers
-  (106 of 3,321 observed records: all real Codex/Cursor/Claude transcripts). Events are folded
-  into a native event only on an exact agent + session id + type + time + content match, and
-  that fold is marked `inferred`, not a confirmed identical record. Anything else stays as a
-  separate variant; a real Cursor merge folded 0 of 20 imported events because Al-exporter
-  stores each transcript as one `system` message instead of native per-line events.
+  events are `agent_reported`/`derived` with no Git evidence. Schema 1.0.0 and 1.1.0 are both
+  accepted. 1.1.0 `session.native_id` is used directly (no path guessing), `session.cwd` and
+  `session.git_remote` are real ProjectEvidence with their declaration source recorded, and
+  `messages[].id` / `line` / `tool_call` drive event identity and tool events. A null
+  `tool_call.status` stays unknown. 1.0.0 still recovers the native session id from
+  `meta.file_path` (106 of 3,321 observed records: all real Codex/Cursor/Claude transcripts).
+  Imports fold into native events at two labelled levels: **deterministic** when agent +
+  native session id + native message id agree, and **inferred** (the 1.0.0 path) when agent +
+  session id + type + time + content agree. Anything else stays as a separate variant; a real
+  Cursor merge folded 0 imported events because Al-exporter stores the transcript as a single
+  `system` message while the native adapter emits per-line events.
+- Al-exporter capability levels come from `interop.json` actual non-empty rates, not from
+  schema presence: `empty` and `absent` mean `unavailable`, and the raw matrix is copied into
+  `agents[].capabilities.interop`. `manifest.device.source_device_id` is adopted as the source
+  device only when `--source-device` is absent; a conflict is reported and the explicit CLI
+  value wins.
 - The 3-way "A+B+C" merge is the same operation as 2-way merge: it is deterministic and
   idempotent, but Git push evidence remains per-device and is never synthesized.
 - Only manual runs are supported. Incremental state stores fingerprints only; unchanged
@@ -384,7 +393,7 @@ integrity/checksums.sha256
 | `codebuddy` | discovery only | 0 | 只观察到目录，未验证会话格式 |
 | `zcode` | not testable | 0 | 本机未安装 |
 | `opencode` | partially verified | 1 | `project/session/message/part` JSON；仅观察到 text part，未观察到工具调用 |
-| `al-exporter` | partially verified | 3,321 | 仅导入：必须显式 `--source-root` + `manifest.json`；没有 cwd/remote/Git 数据 |
+| `al-exporter` | partially verified | 3,321 + 3 | 仅导入：必须显式 `--source-root` + `manifest.json`；兼容 schema 1.0.0/1.1.0；1.1.0 提供 session cwd/remote、消息 id 与声明的设备 |
 
 字段级能力等级与实现细节见 [docs/agent-adapters.md](docs/agent-adapters.md)。
 
@@ -425,12 +434,19 @@ npm run verify      # typecheck + 测试 + 构建
   OpenCode 已验证会话/消息/文本解析，但其工具调用与文件变更记录尚未观察到。
 - Al-exporter 归档只支持导入：`meta.project` 是路径启发式字段，会被忽略；`meta.created_at`
   是文件 mtime，绝不作为事件时间；导入事件只能是 `agent_reported`/`derived`，不含 Git
-  证据。当 `meta.file_path` 命中原生适配器会发现的布局时，会还原原始 native session id
-  （实测 3,321 条记录中 106 条，覆盖全部真实 Codex/Cursor/Claude 会话）。只有 agent、
-  session id、事件类型、时间与内容全部一致时，导入事件才会折叠进原生事件，且该折叠标记为
-  `inferred`（推断配对），不是“同一记录”的确证；其余情况保留为独立变体。真实 Cursor
-  合并中 20 条导入事件折叠 0 条，因为 Al-exporter 把整份 transcript 导出为一条 `system`
-  消息，而原生适配器按行产出事件。
+  证据。兼容 schema 1.0.0 与 1.1.0：1.1.0 直接使用 `session.native_id`（不再反推路径），
+  `session.cwd` / `session.git_remote` 作为真实 ProjectEvidence 并记录声明来源，
+  `messages[].id` / `line` / `tool_call` 决定消息身份与工具事件；`tool_call.status` 为 null
+  时保持未知。1.0.0 仍在 `meta.file_path` 命中原生布局时还原 native session id（实测
+  3,321 条记录中 106 条）。折叠分为两级并明确标注：agent + native session id + 消息 id
+  全等时为 **deterministic**；1.0.0 或缺少消息 id 时，只有 agent、session id、事件类型、
+  时间与内容全部一致才做 **inferred**（推断配对）。其余情况保留为独立变体。真实 Cursor
+  合并中导入事件折叠 0 条，因为 Al-exporter 把整份 transcript 导出为一条 `system` 消息，
+  而原生适配器按行产出事件。
+- Al-exporter 的能力等级按 `interop.json` 的实际非空率填写，而不是看 schema 是否存在：
+  `empty` / `absent` 一律视为 `unavailable`，原始矩阵会写入
+  `agents[].capabilities.interop`。只有当未提供 `--source-device` 时才采用
+  `manifest.device.source_device_id`；两者冲突时会报告，并以显式 CLI 值为准。
 - “A+B+C” 三方合并与两方合并是同一套操作：结果确定且幂等；但 Git 推送证据始终按设备
   独立记录，不会被合成。
 - 仅支持手动执行。增量状态只保存文件指纹：未变化的会话文件复用上一次包中的结果，一旦
