@@ -6,6 +6,8 @@
 development timeline for one project across AI coding agents, devices and Git history.
 It ships as `@zhyr/ai-coding-timeline` and installs the `aitimeline` executable.
 
+Source: <https://github.com/zhyr/multi-agent-coding-timeline>
+
 ---
 
 # English
@@ -219,6 +221,8 @@ performed separately, read-only, and is documented with counts in
 `aitimeline` 是一个本地优先、只读的命令行工具，用于把同一个项目在多个 AI Coding Agent、
 多台设备以及 Git 历史中留下的开发活动，重建为一条统一、可校验的时间线。npm 包名为
 `@zhyr/ai-coding-timeline`，安装后提供 `aitimeline` 命令。
+
+仓库地址：<https://github.com/zhyr/multi-agent-coding-timeline>
 
 它回答这几类问题：
 

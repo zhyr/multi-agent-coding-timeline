@@ -4,6 +4,14 @@
   "description": "Local-first, read-only CLI for reconstructing a unified, verifiable development timeline across AI coding agents and devices.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhyr/multi-agent-coding-timeline.git"
+  },
+  "homepage": "https://github.com/zhyr/multi-agent-coding-timeline#readme",
+  "bugs": {
+    "url": "https://github.com/zhyr/multi-agent-coding-timeline/issues"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
