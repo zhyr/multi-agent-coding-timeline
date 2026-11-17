@@ -105,6 +105,11 @@ export async function runMerge(options: MergeOptions): Promise<MergeOutcome> {
       `${dedup.deterministic_pairs} imported Al-exporter event(s) were folded deterministically by the same agent, native session id and native message id`,
     );
   }
+  if (dedup.line_pairs > 0) {
+    warnings.push(
+      `${dedup.line_pairs} imported Al-exporter event(s) were folded deterministically by the same agent, original source file and source line`,
+    );
+  }
   if (dedup.inferred_pairs > 0) {
     warnings.push(
       `${dedup.inferred_pairs} imported Al-exporter event(s) were paired with native records by session id, type, time and content; the pairing is inferred, not a confirmed identical record`,

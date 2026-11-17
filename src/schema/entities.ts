@@ -71,6 +71,8 @@ export const ActivityEventSchema = obj({
     source_path: z.string().optional(),
     source_path_identity: z.string().optional(),
     source_record_id: z.string().optional(),
+    /** 1-based physical line in the original source file (line-oriented formats). */
+    source_line: z.number().int().positive().optional(),
     capture_method: NonEmpty,
     capture_level: z.enum(['observed', 'derived', 'reported', 'unknown']),
     source_hash: z.string().optional(),
@@ -83,8 +85,9 @@ export const ActivityEventSchema = obj({
     paired_import_event_id: z.string().optional(),
     /**
      * Import adapters only: which source field produced agent.native_event_id.
-     * `message_id` enables deterministic dedup; `session_line` / `message_index`
-     * are stable identities but cannot match a native row id by themselves.
+     * `message_id` enables deterministic dedup; `session_line` can also be
+     * folded deterministically when both sides record `source_line` and the
+     * source file; `message_index` cannot.
      */
     import_identity_source: z.enum(['message_id', 'session_line', 'message_index']).optional(),
   }),

@@ -93,6 +93,7 @@ export class CodexAdapter implements AgentAdapter {
         typeof line.ordinal === 'number' ? String(line.ordinal) : `line:${i + 1}`;
       const base = {
         source_record_id: sourceRecordId,
+        source_line: i + 1,
         sequence: sequence,
         occurred_at: at,
         timestamp_precision: time.precision,

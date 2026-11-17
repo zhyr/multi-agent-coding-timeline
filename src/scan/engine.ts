@@ -548,6 +548,11 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
       `${dedup.deterministic_pairs} imported Al-exporter event(s) folded deterministically by native session id + message id`,
     );
   }
+  if (dedup.line_pairs > 0) {
+    progress(
+      `${dedup.line_pairs} imported Al-exporter event(s) folded deterministically by original source file + line`,
+    );
+  }
   if (dedup.inferred_pairs > 0) {
     report.warnings.push(
       `${dedup.inferred_pairs} imported Al-exporter event(s) were paired with native records by session id, type, time and content; the pairing is inferred, not a confirmed identical record`,

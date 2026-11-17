@@ -12,6 +12,12 @@ export interface DedupResult {
    */
   deterministic_pairs: number;
   /**
+   * Imported Al-exporter events folded into a native event by the original
+   * source file + physical line + event type. This is deterministic identity
+   * alignment for line-oriented formats (Codex ordinal, Cursor transcript).
+   */
+  line_pairs: number;
+  /**
    * Imported Al-exporter events that were folded into a native event by
    * session id + event type + time + content. This pairing is inferred: the
    * two records are not proven to be the same underlying row.
@@ -57,8 +63,9 @@ export function deduplicateEvents(
   // the same record as the native row with that id, so no content heuristic is
   // involved. Removing it before grouping also avoids a false conflict variant.
   const deterministic = foldDeterministicImports(input);
+  const lineFold = foldLineIdentityImports(deterministic.events, deterministic.pairedNative);
   const groups = new Map<string, ActivityEvent[]>();
-  for (const event of deterministic.events) {
+  for (const event of lineFold.events) {
     const group = groups.get(event.dedup_key);
     if (group) group.push(event);
     else groups.set(event.dedup_key, [event]);
@@ -111,9 +118,11 @@ export function deduplicateEvents(
   const pairing = pairImportedEvents(kept);
   return {
     events: sortEvents(pairing.events),
-    duplicates: duplicates + deterministic.deterministicPairs + pairing.inferredPairs,
+    duplicates:
+      duplicates + deterministic.deterministicPairs + lineFold.linePairs + pairing.inferredPairs,
     conflicts,
     deterministic_pairs: deterministic.deterministicPairs,
+    line_pairs: lineFold.linePairs,
     inferred_pairs: pairing.inferredPairs,
   };
 }
@@ -145,9 +154,15 @@ function isImportedEvent(event: ActivityEvent): boolean {
 function foldDeterministicImports(events: readonly ActivityEvent[]): {
   events: ActivityEvent[];
   deterministicPairs: number;
+  pairedNative: Set<ActivityEvent>;
 } {
+  const empty = {
+    events: [...events],
+    deterministicPairs: 0,
+    pairedNative: new Set<ActivityEvent>(),
+  };
   const imported = events.filter((event) => isImportedEvent(event));
-  if (imported.length === 0) return { events: [...events], deterministicPairs: 0 };
+  if (imported.length === 0) return empty;
 
   const nativeByIdentity = new Map<string, ActivityEvent>();
   for (const event of events) {
@@ -155,10 +170,11 @@ function foldDeterministicImports(events: readonly ActivityEvent[]): {
     const key = nativeIdentityKey(event);
     if (key && !nativeByIdentity.has(key)) nativeByIdentity.set(key, event);
   }
-  if (nativeByIdentity.size === 0) return { events: [...events], deterministicPairs: 0 };
+  if (nativeByIdentity.size === 0) return empty;
 
   const consumed = new Set<ActivityEvent>();
   const importIdByNative = new Map<string, string>();
+  const pairedNative = new Set<ActivityEvent>();
   for (const event of imported) {
     if (event.provenance.import_identity_source !== 'message_id') continue;
     const key = nativeIdentityKey(event);
@@ -167,9 +183,10 @@ function foldDeterministicImports(events: readonly ActivityEvent[]): {
     if (!native) continue;
     nativeByIdentity.delete(key);
     consumed.add(event);
+    pairedNative.add(native);
     importIdByNative.set(native.event_id, event.event_id);
   }
-  if (consumed.size === 0) return { events: [...events], deterministicPairs: 0 };
+  if (consumed.size === 0) return empty;
 
   const output: ActivityEvent[] = [];
   for (const event of events) {
@@ -193,7 +210,111 @@ function foldDeterministicImports(events: readonly ActivityEvent[]): {
       provenance: { ...event.provenance, paired_import_event_id: importId },
     });
   }
-  return { events: output, deterministicPairs: consumed.size };
+  return { events: output, deterministicPairs: consumed.size, pairedNative };
+}
+
+/** Basename of the original agent file; the segment identity for rollout files. */
+function sourceFileKey(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const normalized = raw.replace(/\\/g, '/');
+  const base = normalized.slice(normalized.lastIndexOf('/') + 1);
+  return base || undefined;
+}
+
+/**
+ * Identity of one physical row: project + device + agent + original file +
+ * 1-based line + event type. Both the native parser and the Al-exporter archive
+ * point at the same file, so this tuple is an identity, not an inference.
+ */
+function sourceLineIdentityKey(event: ActivityEvent, imported: boolean): string | undefined {
+  const agent = event.agent;
+  if (!agent?.agent_id) return undefined;
+  const line = event.provenance.source_line;
+  if (!line) return undefined;
+  const file = sourceFileKey(
+    imported
+      ? (event.provenance.raw_payload_ref as string | undefined)
+      : event.provenance.source_path,
+  );
+  if (!file) return undefined;
+  return [event.project_id, event.device_id, agent.agent_id, file, line, event.event_type].join(
+    '\u0000',
+  );
+}
+
+/**
+ * Fold imported `session_line` rows into the native row parsed from the same
+ * original file and line. `messages[].line` is the 1-based physical line, so
+ * Codex sessions whose `ordinal` is a thread-global counter still align.
+ *
+ * The fold requires the identity tuple to be unique on both sides: a line that
+ * the exporter split into several rows (Cursor blocks, suffix `#n`) or a line
+ * that produced several native events stays unfolded instead of guessing.
+ */
+function foldLineIdentityImports(
+  events: readonly ActivityEvent[],
+  alreadyPaired: ReadonlySet<ActivityEvent>,
+): { events: ActivityEvent[]; linePairs: number } {
+  const imported = events.filter(
+    (event) => isImportedEvent(event) && event.provenance.import_identity_source === 'session_line',
+  );
+  if (imported.length === 0) return { events: [...events], linePairs: 0 };
+
+  const nativeByKey = new Map<string, ActivityEvent[]>();
+  for (const event of events) {
+    if (isImportedEvent(event) || alreadyPaired.has(event)) continue;
+    const key = sourceLineIdentityKey(event, false);
+    if (!key) continue;
+    const list = nativeByKey.get(key);
+    if (list) list.push(event);
+    else nativeByKey.set(key, [event]);
+  }
+  if (nativeByKey.size === 0) return { events: [...events], linePairs: 0 };
+
+  const importCounts = new Map<string, number>();
+  for (const event of imported) {
+    const key = sourceLineIdentityKey(event, true);
+    if (key) importCounts.set(key, (importCounts.get(key) ?? 0) + 1);
+  }
+
+  const consumed = new Set<ActivityEvent>();
+  const importIdByNative = new Map<string, string>();
+  const pairedNative = new Set<ActivityEvent>();
+  for (const event of imported) {
+    const key = sourceLineIdentityKey(event, true);
+    if (!key) continue;
+    if (importCounts.get(key) !== 1) continue;
+    const native = nativeByKey.get(key);
+    if (!native || native.length !== 1) continue;
+    consumed.add(event);
+    pairedNative.add(native[0]!);
+    importIdByNative.set(native[0]!.event_id, event.event_id);
+  }
+  if (consumed.size === 0) return { events: [...events], linePairs: 0 };
+
+  const output: ActivityEvent[] = [];
+  for (const event of events) {
+    if (consumed.has(event)) continue;
+    const importId = importIdByNative.get(event.event_id);
+    if (!importId) {
+      output.push(event);
+      continue;
+    }
+    const note =
+      `deterministic pairing with Al-exporter import ${importId}: same agent, ` +
+      `source file and line ${event.provenance.source_line}`;
+    output.push({
+      ...event,
+      correlation: event.correlation
+        ? {
+            ...event.correlation,
+            note: event.correlation.note ? `${event.correlation.note}; ${note}` : note,
+          }
+        : { kind: 'strongly_supported', match_confidence: 'exact', note },
+      provenance: { ...event.provenance, paired_import_event_id: importId },
+    });
+  }
+  return { events: output, linePairs: consumed.size };
 }
 
 /**

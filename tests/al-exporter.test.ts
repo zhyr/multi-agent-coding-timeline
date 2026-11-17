@@ -855,6 +855,88 @@ describe('Al-exporter import adapter', () => {
     expect(inferred.events[0]!.correlation?.note).toMatch(/inferred pairing/);
   });
 
+  it('folds session_line rows deterministically when the original file and line agree', () => {
+    const segment = 'rollout-2026-10-08T10-18-46-01a10dff-3484-7f53-88b0-8ab545dabea3_01a1194e-55e8.jsonl.zst';
+    const nativeRow = makeEvent({
+      dedup_key: 'dedup:native:codex:01a10dff:3783',
+      dedup_tier: 'native_id',
+      event_type: 'agent.user_request.submitted',
+      project_id: 'proj_align',
+      device_id: 'device-a',
+      agent: {
+        agent_id: 'codex',
+        agent_name: 'Codex',
+        // Native Codex ids come from the rollout filename, so they do not equal
+        // the session_meta uuid used by the archive.
+        native_session_id: '2026-10-08T10-18-46-01a10dff-3484-7f53-88b0-8ab545dabea3_01a1194e-55e8',
+        native_event_id: '3783',
+      },
+      activity: { role: 'user', content: 'same row' },
+      time: { occurred_at: '2026-10-08T02:18:52.000Z', observed_at: '2026-10-08T00:00:01.000Z' },
+      provenance: {
+        source_type: 'agent-session',
+        source_path: `~/.codex/sessions/2026/10/08/${segment}`,
+        source_path_identity: `codex/sessions/2026/10/08/${segment}`,
+        source_record_id: '3783',
+        source_line: 9,
+        capture_method: 'adapter:codex',
+        capture_level: 'observed',
+      },
+      parser: { adapter_id: 'codex', adapter_version: '1.0.0', parser_version: '1.0.0', schema_version: '1.0.0' },
+    });
+    const importedRow = makeEvent({
+      dedup_key: 'dedup:native:codex:01a10dff:session:01a10dff:L9',
+      event_type: 'agent.user_request.submitted',
+      project_id: 'proj_align',
+      device_id: 'device-a',
+      agent: {
+        agent_id: 'codex',
+        agent_name: 'Codex',
+        native_session_id: '01a10dff-3484-7f53-88b0-8ab545dabea3',
+        native_event_id: 'session:01a10dff-3484-7f53-88b0-8ab545dabea3:L9',
+      },
+      activity: { role: 'user', content: 'same row' },
+      time: { occurred_at: '2026-10-08T02:18:52.000Z', observed_at: '2026-10-08T00:00:01.000Z' },
+      provenance: {
+        source_type: 'agent-session',
+        source_path: 'export/codex/session.json',
+        source_path_identity: 'al-exporter/codex/session.json',
+        source_record_id: 'message:L9',
+        source_line: 9,
+        raw_payload_ref: `/Users/alice/.codex/sessions/2026/10/08/${segment}`,
+        capture_method: 'adapter:al-exporter',
+        capture_level: 'derived',
+        import_identity_source: 'session_line',
+      },
+      parser: { adapter_id: 'al-exporter', adapter_version: '1.1.0', parser_version: '1.1.0', schema_version: '1.0.0' },
+    });
+
+    const folded = deduplicateEvents([nativeRow, importedRow]);
+    expect(folded.events).toHaveLength(1);
+    expect(folded.deterministic_pairs).toBe(0);
+    expect(folded.line_pairs).toBe(1);
+    expect(folded.inferred_pairs).toBe(0);
+    expect(folded.events[0]!.provenance.capture_method).toBe('adapter:codex');
+    expect(folded.events[0]!.correlation?.note).toMatch(/source file and line 9/);
+    expect(folded.events[0]!.correlation?.match_confidence).toBe('exact');
+
+    // A line the exporter split into several rows is ambiguous: no fold.
+    const splitRow = makeEvent({
+      ...importedRow,
+      dedup_key: 'dedup:native:codex:01a10dff:session:01a10dff:L9#1',
+      event_id: undefined,
+      agent: {
+        ...importedRow.agent!,
+        native_event_id: 'session:01a10dff-3484-7f53-88b0-8ab545dabea3:L9#1',
+      },
+      activity: { role: 'user', content: 'second block on the same line' },
+      time: { occurred_at: '2026-11-17T01:00:00.000Z', observed_at: '2026-11-17T00:00:01.000Z' },
+    });
+    const ambiguous = deduplicateEvents([nativeRow, importedRow, splitRow]);
+    expect(ambiguous.line_pairs).toBe(0);
+    expect(ambiguous.events).toHaveLength(3);
+  });
+
   it('rejects an invalid manifest and reports it as a source failure', async () => {
     await mkdir(root, { recursive: true });
     await writeFile(path.join(root, 'manifest.json'), '{"items": "not-an-array"}', 'utf8');

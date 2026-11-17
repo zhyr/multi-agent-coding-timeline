@@ -702,6 +702,7 @@ export class AlExporterAdapter implements AgentAdapter {
         evidence_level: 'agent_reported',
         capture_level: 'derived',
         source_record_id: seen === 1 ? sourceRecordId : `${sourceRecordId}#${seen}`,
+        source_line: lineNumber,
         sequence,
         agent_override: agentOverride,
         raw_payload_ref: identity.filePath,

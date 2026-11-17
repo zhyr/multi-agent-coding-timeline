@@ -90,6 +90,7 @@ export function normalizeRecord(record: AdapterRecord, ctx: NormalizeContext): A
     source_path: displayPath(ctx.session.path),
     source_path_identity: identity,
     source_record_id: record.source_record_id,
+    source_line: record.source_line,
     raw_payload_ref: record.raw_payload_ref,
     capture_method: ctx.captureMethod ?? `adapter:${ctx.adapter.id}`,
     capture_level: record.capture_level,

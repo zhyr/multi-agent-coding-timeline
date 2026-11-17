@@ -105,6 +105,8 @@ export interface AdapterRecord {
   capture_level: CaptureLevel;
   /** Stable identifier of the original line / row inside the source. */
   source_record_id: string;
+  /** 1-based physical line in the original source file, when the format is line-oriented. */
+  source_line?: number;
   /** Original order inside the session. */
   sequence: number;
   project_evidence?: ProjectEvidence;

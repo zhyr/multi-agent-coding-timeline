@@ -89,6 +89,7 @@ export class CursorAdapter implements AgentAdapter {
       const sourceRecordId = `line:${i + 1}`;
       const base = {
         source_record_id: sourceRecordId,
+        source_line: i + 1,
         sequence,
         raw_type: typeof line.type === 'string' ? line.type : role,
         evidence_level: 'verified' as const,

@@ -96,6 +96,7 @@ export class QoderAdapter implements AgentAdapter {
         : {};
       const base = {
         source_record_id: sourceRecordId,
+        source_line: i + 1,
         sequence,
         occurred_at: at,
         timestamp_precision: time.precision,
