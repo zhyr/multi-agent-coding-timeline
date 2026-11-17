@@ -208,8 +208,13 @@ performed separately, read-only, and is documented with counts in
   and file-change records have not been observed.
 - Al-exporter archives are import-only: a thread's `meta.project` is a path heuristic and is
   ignored, `meta.created_at` is a file mtime and is never used as event time, and imported
-  events are `agent_reported`/`derived` with no Git evidence. Imported events do **not**
-  deduplicate against a native scan of the same session — native session ids differ.
+  events are `agent_reported`/`derived` with no Git evidence. The native session id is
+  recovered from `meta.file_path` when the path matches a layout a native adapter discovers
+  (106 of 3,321 observed records: all real Codex/Cursor/Claude transcripts). Events are folded
+  into a native event only on an exact agent + session id + type + time + content match, and
+  that fold is marked `inferred`, not a confirmed identical record. Anything else stays as a
+  separate variant; a real Cursor merge folded 0 of 20 imported events because Al-exporter
+  stores each transcript as one `system` message instead of native per-line events.
 - The 3-way "A+B+C" merge is the same operation as 2-way merge: it is deterministic and
   idempotent, but Git push evidence remains per-device and is never synthesized.
 - Only manual runs are supported. Incremental state stores fingerprints only; unchanged
@@ -420,7 +425,12 @@ npm run verify      # typecheck + 测试 + 构建
   OpenCode 已验证会话/消息/文本解析，但其工具调用与文件变更记录尚未观察到。
 - Al-exporter 归档只支持导入：`meta.project` 是路径启发式字段，会被忽略；`meta.created_at`
   是文件 mtime，绝不作为事件时间；导入事件只能是 `agent_reported`/`derived`，不含 Git
-  证据。导入事件与原生扫描**不会自动去重**，因为两者的 native session id 不同。
+  证据。当 `meta.file_path` 命中原生适配器会发现的布局时，会还原原始 native session id
+  （实测 3,321 条记录中 106 条，覆盖全部真实 Codex/Cursor/Claude 会话）。只有 agent、
+  session id、事件类型、时间与内容全部一致时，导入事件才会折叠进原生事件，且该折叠标记为
+  `inferred`（推断配对），不是“同一记录”的确证；其余情况保留为独立变体。真实 Cursor
+  合并中 20 条导入事件折叠 0 条，因为 Al-exporter 把整份 transcript 导出为一条 `system`
+  消息，而原生适配器按行产出事件。
 - “A+B+C” 三方合并与两方合并是同一套操作：结果确定且幂等；但 Git 推送证据始终按设备
   独立记录，不会被合成。
 - 仅支持手动执行。增量状态只保存文件指纹：未变化的会话文件复用上一次包中的结果，一旦

@@ -487,6 +487,11 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
   // ---- Deterministic dedup, relations and ordering ----
   const dedup = deduplicateEvents(allEvents);
   const events = dedup.events;
+  if (dedup.inferred_pairs > 0) {
+    report.warnings.push(
+      `${dedup.inferred_pairs} imported Al-exporter event(s) were paired with native records by session id, type, time and content; the pairing is inferred, not a confirmed identical record`,
+    );
+  }
   const nativeToEvent = new Map<string, string>();
   for (const event of events) {
     const native = event.agent?.native_event_id;

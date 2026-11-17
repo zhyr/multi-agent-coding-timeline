@@ -100,6 +100,11 @@ export async function runMerge(options: MergeOptions): Promise<MergeOutcome> {
     inputTimelineIds,
   );
   const events = sortEvents(dedup.events);
+  if (dedup.inferred_pairs > 0) {
+    warnings.push(
+      `${dedup.inferred_pairs} imported Al-exporter event(s) were paired with native records by session id, type, time and content; the pairing is inferred, not a confirmed identical record`,
+    );
+  }
   const eventIds = new Set(events.map((e) => e.event_id));
 
   const relations: EventRelation[] = mergeById(

@@ -5,7 +5,16 @@ export interface DedupResult {
   events: ActivityEvent[];
   duplicates: number;
   conflicts: ConflictRecord[];
+  /**
+   * Imported Al-exporter events that were folded into a native event by
+   * session id + event type + time + content. This pairing is inferred: the
+   * two records are not proven to be the same underlying row.
+   */
+  inferred_pairs: number;
 }
+
+/** Capture method written by the Al-exporter import adapter. */
+const IMPORT_CAPTURE_METHOD = 'adapter:al-exporter';
 
 /** Deterministic ordering for both scan and merge. */
 export function sortEvents(events: ActivityEvent[]): ActivityEvent[] {
@@ -89,7 +98,96 @@ export function deduplicateEvents(
     }
   }
 
-  return { events: sortEvents(kept), duplicates, conflicts };
+  const pairing = pairImportedEvents(kept);
+  return {
+    events: sortEvents(pairing.events),
+    duplicates: duplicates + pairing.inferredPairs,
+    conflicts,
+    inferred_pairs: pairing.inferredPairs,
+  };
+}
+
+/**
+ * Pair an imported Al-exporter event with the native event it was exported from.
+ *
+ * Imported events can carry the agent-native session id recovered from
+ * `meta.file_path`, but never the native event/line id. The primary dedup key
+ * therefore cannot match across import and native scans. This pass folds the
+ * two sides together only when the agent, native session id, event type,
+ * occurred_at and content all agree, and labels the result as an inference.
+ * When any of those differ the imported event is kept, so unmatched variants
+ * remain visible instead of being silently merged.
+ */
+function pairingFingerprint(event: ActivityEvent): string | undefined {
+  const agent = event.agent;
+  if (!agent?.native_session_id) return undefined;
+  const activity = event.activity ?? {};
+  const content = activity.content ?? activity.content_summary;
+  const body =
+    content !== undefined
+      ? `text:${content}`
+      : `len:${activity.content_length ?? ''}|role:${activity.role ?? ''}|tool:${activity.tool_name ?? ''}`;
+  return [
+    event.project_id,
+    event.device_id,
+    agent.agent_id,
+    agent.native_session_id,
+    event.event_type,
+    event.time.occurred_at ?? '',
+    body,
+  ].join('\u0000');
+}
+
+function pairImportedEvents(events: ActivityEvent[]): { events: ActivityEvent[]; inferredPairs: number } {
+  const imported = events.filter((event) => event.provenance.capture_method === IMPORT_CAPTURE_METHOD);
+  if (imported.length === 0) return { events, inferredPairs: 0 };
+
+  const nativeByKey = new Map<string, ActivityEvent>();
+  for (const event of events) {
+    if (event.provenance.capture_method === IMPORT_CAPTURE_METHOD) continue;
+    const key = pairingFingerprint(event);
+    if (key && !nativeByKey.has(key)) nativeByKey.set(key, event);
+  }
+
+  const consumed = new Set<string>();
+  const paired = new Map<string, string>();
+  for (const event of imported) {
+    const key = pairingFingerprint(event);
+    if (!key) continue;
+    const native = nativeByKey.get(key);
+    if (!native) continue;
+    nativeByKey.delete(key);
+    consumed.add(event.event_id);
+    paired.set(native.event_id, event.event_id);
+  }
+  if (paired.size === 0) return { events, inferredPairs: 0 };
+
+  const output: ActivityEvent[] = [];
+  for (const event of events) {
+    if (event.provenance.capture_method === IMPORT_CAPTURE_METHOD) {
+      if (!consumed.has(event.event_id)) output.push(event);
+      continue;
+    }
+    const importId = paired.get(event.event_id);
+    if (!importId) {
+      output.push(event);
+      continue;
+    }
+    const note =
+      `inferred pairing with Al-exporter import ${importId}: same agent, session id, event type, ` +
+      'time and content; the records are not confirmed identical';
+    output.push({
+      ...event,
+      correlation: event.correlation
+        ? {
+            ...event.correlation,
+            note: event.correlation.note ? `${event.correlation.note}; ${note}` : note,
+          }
+        : { kind: 'strongly_supported', match_confidence: 'candidate', note },
+      provenance: { ...event.provenance, paired_import_event_id: importId },
+    });
+  }
+  return { events: output, inferredPairs: paired.size };
 }
 
 /** Deterministic merge of record collections keyed by an explicit ID. */

@@ -75,6 +75,12 @@ export const ActivityEventSchema = obj({
     capture_level: z.enum(['observed', 'derived', 'reported', 'unknown']),
     source_hash: z.string().optional(),
     confidence: Confidence.optional(),
+    /**
+     * Set when an Al-exporter import was folded into this event by inferred
+     * pairing (same agent, session id, type, time and content). The referenced
+     * event is not shipped; the pairing is not a confirmed identical record.
+     */
+    paired_import_event_id: z.string().optional(),
   }),
 
   /** Evidence is separate from factual content: an inference is never a verified fact. */

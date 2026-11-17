@@ -3,7 +3,9 @@ import { mkdir, writeFile, symlink, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { AlExporterAdapter } from '../src/adapters/al-exporter.js';
 import { runScan } from '../src/scan/engine.js';
-import { tempDir, createGitRepo } from './helpers/fixtures.js';
+import { deduplicateEvents } from '../src/merge/dedup.js';
+import type { ActivityEvent } from '../src/schema/entities.js';
+import { tempDir, createGitRepo, makeEvent } from './helpers/fixtures.js';
 
 interface ExportFile {
   file: string;
@@ -258,7 +260,7 @@ describe('Al-exporter import adapter', () => {
     expect(codex.project_evidence?.cwd).toBeUndefined();
     expect(codex.project_evidence?.projectPathHints).toBeUndefined();
 
-    const claude = await adapter.parseSession(sessions.find((s) => s.native_session_id === 'claude-1')!);
+    const claude = await adapter.parseSession(sessions.find((s) => s.relative_path === 'claude_code/thread-2.json')!);
     expect(claude.project_evidence?.cwd).toBeUndefined();
     expect(claude.project_evidence?.projectPathHints).toEqual(['/Users/alice/work/fixture/project']);
   });
@@ -347,6 +349,168 @@ describe('Al-exporter import adapter', () => {
     expect(imported.every((e) => e.evidence.level !== 'verified')).toBe(true);
 
     expect(await readFile(path.join(exportRoot, 'workbuddy/thread-0.json'), 'utf8')).toBe(before);
+  });
+
+  it('recovers native session ids from meta.file_path for layouts native adapters discover', async () => {
+    await writeExport(root, [
+      {
+        file: 'codex/a.json',
+        threadId: 'tx-codex',
+        record: thread({ filePath: '/Users/alice/.codex/sessions/2026/11/17/rollout-2026-11-17T01-00-00-aaaa-bbbb.jsonl' }),
+      },
+      {
+        file: 'cursor/b.json',
+        source: 'cursor',
+        threadId: 'tx-cursor',
+        record: thread({
+          source: 'cursor',
+          filePath: '/Users/alice/.cursor/projects/Users-alice-work-proj/agent-transcripts/11111111-2222/11111111-2222.jsonl',
+        }),
+      },
+      {
+        file: 'cursor/c.json',
+        source: 'cursor',
+        threadId: 'tx-subagent',
+        record: thread({
+          source: 'cursor',
+          filePath: '/Users/alice/.cursor/projects/Users-alice-work-proj/agent-transcripts/11111111-2222/subagents/33333333-4444.jsonl',
+        }),
+      },
+      {
+        file: 'cursor/d.json',
+        source: 'cursor',
+        threadId: 'tx-history',
+        record: thread({
+          source: 'cursor',
+          filePath: '/Users/alice/.cursor/projects/Users-alice-work-proj/History/notes.md',
+        }),
+      },
+      {
+        file: 'claude_code/e.json',
+        source: 'claude_code',
+        threadId: 'tx-claude',
+        record: thread({
+          source: 'claude_code',
+          filePath: '/Users/alice/.claude/projects/-Users-alice-work-proj/55555555-6666.jsonl',
+        }),
+      },
+      {
+        file: 'qoder/f.json',
+        source: 'qoder',
+        threadId: 'tx-qoder',
+        record: thread({
+          source: 'qoder',
+          filePath: '/Users/alice/.qoder/projects/Users-alice-work-proj/77777777-8888.jsonl',
+        }),
+      },
+    ]);
+    const { adapter, source, sessions } = await loadSessions(root);
+    const ids = Object.fromEntries(sessions.map((s) => [s.relative_path, s.native_session_id]));
+    expect(ids['codex/a.json']).toBe('2026-11-17T01-00-00-aaaa-bbbb');
+    expect(ids['cursor/b.json']).toBe('11111111-2222');
+    expect(ids['cursor/c.json']).toBe('33333333-4444');
+    expect(ids['claude_code/e.json']).toBe('55555555-6666');
+    expect(ids['qoder/f.json']).toBe('77777777-8888');
+    // A non-session artifact keeps the Al-exporter thread id: it has no native counterpart.
+    expect(ids['cursor/d.json']).toBe('tx-history');
+    expect(source.metadata?.native_session_ids_recovered).toBe(5);
+
+    const parsed = await adapter.parseSession(sessions.find((s) => s.relative_path === 'codex/a.json')!);
+    expect(parsed.records[1]!.native_event_id).toBe('2026-11-17T01-00-00-aaaa-bbbb:m1');
+  });
+
+  it('folds imported events into native ones only on an exact session/content/time match', () => {
+    const build = (options: {
+      key: string;
+      captureMethod: string;
+      captureLevel: 'observed' | 'derived';
+      session: string;
+      content: string;
+      occurredAt?: string;
+    }): ActivityEvent =>
+      makeEvent({
+        dedup_key: options.key,
+        event_type: 'agent.response.received',
+        project_id: 'proj_align',
+        device_id: 'device-a',
+        agent: {
+          agent_id: 'cursor',
+          agent_name: 'Cursor',
+          native_session_id: options.session,
+          native_event_id: options.key,
+        },
+        activity: { role: 'assistant', content: options.content },
+        time: { occurred_at: options.occurredAt, observed_at: '2026-11-17T00:00:01.000Z' },
+        provenance: {
+          source_type: 'agent-session',
+          source_path: options.captureLevel === 'derived' ? 'export/cursor/x.json' : 'sessions/x.jsonl',
+          source_path_identity: options.captureLevel === 'derived' ? 'al-exporter/cursor/x.json' : 'cursor/x.jsonl',
+          source_record_id: options.key,
+          capture_method: options.captureMethod,
+          capture_level: options.captureLevel,
+        },
+        parser: {
+          adapter_id: options.captureLevel === 'derived' ? 'al-exporter' : 'cursor',
+          adapter_version: '1.0.0',
+          parser_version: '1.0.0',
+          schema_version: '1.0.0',
+        },
+      });
+
+    const native = build({
+      key: 'native-1',
+      captureMethod: 'adapter:cursor',
+      captureLevel: 'observed',
+      session: 'sess-1',
+      content: 'Importer added',
+      occurredAt: '2026-11-17T01:00:00.000Z',
+    });
+    const imported = build({
+      key: 'import-1',
+      captureMethod: 'adapter:al-exporter',
+      captureLevel: 'derived',
+      session: 'sess-1',
+      content: 'Importer added',
+      occurredAt: '2026-11-17T01:00:00.000Z',
+    });
+
+    const paired = deduplicateEvents([native, imported]);
+    expect(paired.events).toHaveLength(1);
+    expect(paired.duplicates).toBe(1);
+    expect(paired.inferred_pairs).toBe(1);
+    const kept = paired.events[0]!;
+    expect(kept.provenance.capture_method).toBe('adapter:cursor');
+    expect(kept.provenance.paired_import_event_id).toBeTruthy();
+    expect(kept.correlation?.match_confidence).toBe('candidate');
+    expect(kept.correlation?.note).toMatch(/inferred pairing/);
+    expect(kept.evidence.level).toBe('verified');
+
+    const distinct = (overrides: { session?: string; content?: string; occurredAt?: string }) =>
+      build({
+        key: `import-${overrides.session ?? ''}-${overrides.content ?? ''}-${overrides.occurredAt ?? ''}`,
+        captureMethod: 'adapter:al-exporter',
+        captureLevel: 'derived',
+        session: overrides.session ?? 'sess-1',
+        content: overrides.content ?? 'Importer added',
+        occurredAt: overrides.occurredAt ?? '2026-11-17T01:00:00.000Z',
+      });
+
+    // A different session, content or timestamp must remain a separate event.
+    for (const variant of [
+      distinct({ session: 'sess-2' }),
+      distinct({ content: 'Something else' }),
+      distinct({ occurredAt: '2026-11-17T01:00:00.001Z' }),
+    ]) {
+      const result = deduplicateEvents([native, variant]);
+      expect(result.events).toHaveLength(2);
+      expect(result.inferred_pairs).toBe(0);
+    }
+
+    // An import without any native counterpart is never dropped.
+    const lone = deduplicateEvents([imported]);
+    expect(lone.events).toHaveLength(1);
+    expect(lone.events[0]!.provenance.capture_method).toBe('adapter:al-exporter');
+    expect(lone.inferred_pairs).toBe(0);
   });
 
   it('rejects an invalid manifest and reports it as a source failure', async () => {

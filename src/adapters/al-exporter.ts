@@ -120,6 +120,54 @@ function upstreamAgent(source: string | undefined, filePath: string | undefined)
 }
 
 /**
+ * Recover the agent-native session id from the original file recorded in
+ * `meta.file_path`. Al-exporter's own `thread_id` is
+ * `sha1(file_path + "\0" + session_id)[0..16]` and never equals a native id;
+ * `meta.extra.session_id` is absent from every record in the observed archive.
+ * The path is therefore the only bridge to the native session identity.
+ *
+ * Only layouts that the native adapters themselves discover are accepted, so a
+ * recovered id is comparable with `native_session_id` from a native scan.
+ */
+function recoverOriginalSessionId(agentId: string, filePath: string | undefined): string | undefined {
+  if (!filePath) return undefined;
+  const p = filePath.replace(/\\/g, '/');
+  if (agentId === 'codex') {
+    return /\/\.codex\/sessions\/.*\/rollout-(.+?)\.jsonl(?:\.zst)?$/.exec(p)?.[1];
+  }
+  if (agentId === 'opencode') {
+    return /\/opencode\/storage\/session\/[^/]+\/([^/]+)\.json$/.exec(p)?.[1];
+  }
+  if (agentId === 'cursor') {
+    return /\/\.cursor\/projects\/[^/]+\/agent-transcripts\//.test(p) && p.endsWith('.jsonl')
+      ? path.basename(p, '.jsonl')
+      : undefined;
+  }
+  if (agentId === 'claude-code') {
+    return /\/\.claude\/projects\/[^/]+\/([^/]+)\.jsonl$/.exec(p)?.[1];
+  }
+  if (agentId === 'qoder') {
+    return /\/\.qoder\/projects\/[^/]+\/([^/]+)\.jsonl$/.exec(p)?.[1];
+  }
+  if (agentId === 'trae') {
+    return /\/\.trae[^/]*\/memory\/projects\/.*\/([^/]+)\.jsonl$/.exec(p)?.[1];
+  }
+  return undefined;
+}
+
+/** Read only the identity fields needed to align a thread with a native session. */
+async function readThreadIdentity(file: string): Promise<{ source?: string; filePath?: string } | undefined> {
+  try {
+    const document = JSON.parse(await readFile(file, 'utf8')) as unknown;
+    if (!isRecord(document)) return undefined;
+    const meta = isRecord(document.meta) ? document.meta : {};
+    return { source: asString(meta.source), filePath: asString(meta.file_path) };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Project evidence is deliberately narrow:
  *  1. WorkBuddy is the only source that records a real cwd (`extra.project_directory`).
  *  2. Otherwise, decode the agent-native project directory that may survive in
@@ -191,6 +239,7 @@ export class AlExporterAdapter implements AgentAdapter {
     const usedIds = new Set<string>();
     let missing = 0;
     let skippedSymlinks = 0;
+    let recoveredIds = 0;
 
     for (let index = 0; index < manifest.items.length; index += 1) {
       const item = manifest.items[index]!;
@@ -214,7 +263,13 @@ export class AlExporterAdapter implements AgentAdapter {
       }
       if (!info.isFile()) continue;
 
-      const baseId = safeNativeId(item.thread_id, path.basename(relative, path.extname(relative)));
+      const identity = await readThreadIdentity(absolute);
+      const sourceName = identity?.source ?? asString(item.source);
+      const agent = upstreamAgent(sourceName, identity?.filePath);
+      const recoveredId = recoverOriginalSessionId(agent.id, identity?.filePath);
+      if (recoveredId) recoveredIds += 1;
+
+      const baseId = safeNativeId(recoveredId ?? item.thread_id, path.basename(relative, path.extname(relative)));
       let nativeId = baseId;
       if (usedIds.has(nativeId)) nativeId = `${baseId}#${index}`;
       usedIds.add(nativeId);
@@ -229,8 +284,11 @@ export class AlExporterAdapter implements AgentAdapter {
         project_evidence: {},
         metadata: {
           skipped_symlinks: skippedSymlinks,
-          al_exporter_source: asString(item.source),
+          al_exporter_source: sourceName,
           al_exporter_thread_id: asString(item.thread_id),
+          al_exporter_original_session_id: recoveredId,
+          al_exporter_session_id_source: recoveredId ? 'meta.file_path' : 'manifest.thread_id',
+          al_exporter_agent: agent.id,
           al_exporter_hash: asString(item.hash),
           al_exporter_sha256: asString(item.sha256),
           al_exporter_version: manifest.exporterVersion,
@@ -244,6 +302,7 @@ export class AlExporterAdapter implements AgentAdapter {
       manifest_items: manifest.items.length,
       missing_items: missing,
       skipped_symlinks: skippedSymlinks,
+      native_session_ids_recovered: recoveredIds,
     };
     sessions.sort((a, b) => a.relative_path.localeCompare(b.relative_path));
     return sessions;
@@ -411,7 +470,8 @@ export class AlExporterAdapter implements AgentAdapter {
         'Al-exporter aliases OpenCode into Codex; the original .opencode path is used to restore the opencode agent id.',
         'Tool calls are recovered only from [Tool Use] text or message meta.kind; no execution status or file changes exist.',
         'Imported events use the original agent id via agent_override, but session records still belong to the al-exporter adapter.',
-        'Imported events are not deduplicated against a native scan of the same session: native_session_id differs.',
+        'The native session id is recovered from meta.file_path for native layouts; other records keep the Al-exporter thread id and cannot be aligned.',
+        'An imported event is folded into a native event only on an exact agent + session id + type + time + content match, and the fold is marked inferred.',
         'No Git commits/pushes exist in the archive, so this adapter never produces verified Git evidence.',
       ],
     });
