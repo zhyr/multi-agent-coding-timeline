@@ -99,6 +99,10 @@ export interface AdapterRecord {
   project_evidence?: ProjectEvidence;
   raw_type?: string;
   metadata?: Record<string, unknown>;
+  /** Import adapters: attribute the event to the original agent, not the importer. */
+  agent_override?: { id: string; name?: string; version?: string };
+  /** Import adapters: original record behind a derived artifact (two-hop provenance). */
+  raw_payload_ref?: string;
 }
 
 export interface ParseIssue {

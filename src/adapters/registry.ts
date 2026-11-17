@@ -6,6 +6,7 @@ import { WorkBuddyAdapter } from './workbuddy.js';
 import { TraeAdapter } from './trae.js';
 import { CodeBuddyAdapter, ZCodeAdapter } from './limited-adapters.js';
 import { OpenCodeAdapter } from './opencode.js';
+import { AlExporterAdapter } from './al-exporter.js';
 import type { AgentAdapter } from './types.js';
 import { UsageError } from '../core/errors.js';
 
@@ -21,6 +22,7 @@ export function createAdapters(): AgentAdapter[] {
     new CodeBuddyAdapter(),
     new WorkBuddyAdapter(),
     new OpenCodeAdapter(),
+    new AlExporterAdapter(),
   ];
 }
 

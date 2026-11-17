@@ -164,6 +164,7 @@ Every event carries `evidence.level` — `verified`, `agent_reported`, `inferred
 | `codebuddy` | discovery only | 0 | directory observed, no verified session format |
 | `zcode` | not testable | 0 | no local installation |
 | `opencode` | partially verified | 1 | `project/session/message/part` JSON; text parts only, no tool parts observed |
+| `al-exporter` | partially verified | 3,321 | import only: requires explicit `--source-root` + `manifest.json`; no cwd/remote/Git data |
 
 Details and per-field capability levels: [docs/agent-adapters.md](docs/agent-adapters.md).
 
@@ -205,6 +206,10 @@ performed separately, read-only, and is documented with counts in
 - Claude Code and ZCode have no locally verified parser; they are not claimed as supported.
   CodeBuddy is discovery-only. OpenCode is verified for sessions/messages/text, but its tool
   and file-change records have not been observed.
+- Al-exporter archives are import-only: a thread's `meta.project` is a path heuristic and is
+  ignored, `meta.created_at` is a file mtime and is never used as event time, and imported
+  events are `agent_reported`/`derived` with no Git evidence. Imported events do **not**
+  deduplicate against a native scan of the same session — native session ids differ.
 - The 3-way "A+B+C" merge is the same operation as 2-way merge: it is deterministic and
   idempotent, but Git push evidence remains per-device and is never synthesized.
 - Only manual runs are supported. Incremental state stores fingerprints only; unchanged
@@ -374,6 +379,7 @@ integrity/checksums.sha256
 | `codebuddy` | discovery only | 0 | 只观察到目录，未验证会话格式 |
 | `zcode` | not testable | 0 | 本机未安装 |
 | `opencode` | partially verified | 1 | `project/session/message/part` JSON；仅观察到 text part，未观察到工具调用 |
+| `al-exporter` | partially verified | 3,321 | 仅导入：必须显式 `--source-root` + `manifest.json`；没有 cwd/remote/Git 数据 |
 
 字段级能力等级与实现细节见 [docs/agent-adapters.md](docs/agent-adapters.md)。
 
@@ -412,6 +418,9 @@ npm run verify      # typecheck + 测试 + 构建
 - Cursor 的转录记录没有时间戳，因此其 `occurred_at` 为空，排序时回退到 `observed_at`。
 - Claude Code、ZCode 在本机没有经过验证的解析器，因此不宣称已支持；CodeBuddy 仅做到目录发现。
   OpenCode 已验证会话/消息/文本解析，但其工具调用与文件变更记录尚未观察到。
+- Al-exporter 归档只支持导入：`meta.project` 是路径启发式字段，会被忽略；`meta.created_at`
+  是文件 mtime，绝不作为事件时间；导入事件只能是 `agent_reported`/`derived`，不含 Git
+  证据。导入事件与原生扫描**不会自动去重**，因为两者的 native session id 不同。
 - “A+B+C” 三方合并与两方合并是同一套操作：结果确定且幂等；但 Git 推送证据始终按设备
   独立记录，不会被合成。
 - 仅支持手动执行。增量状态只保存文件指纹：未变化的会话文件复用上一次包中的结果，一旦

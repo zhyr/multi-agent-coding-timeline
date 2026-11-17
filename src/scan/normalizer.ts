@@ -80,12 +80,17 @@ export function normalizeRecord(record: AdapterRecord, ctx: NormalizeContext): A
         }
       : undefined;
 
+  const agentId = record.agent_override?.id ?? ctx.adapter.id;
+  const agentName = record.agent_override?.name ?? ctx.adapter.name;
+  const agentVersion = record.agent_override?.version ?? ctx.adapter.version;
+
   const provenance: ActivityEvent['provenance'] = {
     source_type: ctx.sourceType ?? 'agent-session',
-    source_agent: ctx.adapter.id,
+    source_agent: agentId,
     source_path: displayPath(ctx.session.path),
     source_path_identity: identity,
     source_record_id: record.source_record_id,
+    raw_payload_ref: record.raw_payload_ref,
     capture_method: ctx.captureMethod ?? `adapter:${ctx.adapter.id}`,
     capture_level: record.capture_level,
     source_hash: ctx.sourceHash,
@@ -96,7 +101,7 @@ export function normalizeRecord(record: AdapterRecord, ctx: NormalizeContext): A
     event_type: record.event_type,
     time: { occurred_at: record.occurred_at },
     agent: {
-      agent_id: ctx.adapter.id,
+      agent_id: agentId,
       native_session_id: ctx.session.native_session_id,
       native_event_id: record.native_event_id,
       model: record.model,
@@ -108,7 +113,7 @@ export function normalizeRecord(record: AdapterRecord, ctx: NormalizeContext): A
   });
 
   const dedup = computeDedupKey({
-    agentId: ctx.adapter.id,
+    agentId,
     nativeSessionId: ctx.session.native_session_id,
     nativeEventId: record.native_event_id,
     sourceDeviceId: ctx.sourceDeviceId,
@@ -144,9 +149,9 @@ export function normalizeRecord(record: AdapterRecord, ctx: NormalizeContext): A
     device_id: ctx.sourceDeviceId,
     scanner_device_id: ctx.scannerDeviceId,
     agent: {
-      agent_id: ctx.adapter.id,
-      agent_name: ctx.adapter.name,
-      agent_version: ctx.adapter.version,
+      agent_id: agentId,
+      agent_name: agentName,
+      agent_version: agentVersion,
       model: record.model,
       native_session_id: ctx.session.native_session_id,
       native_event_id: record.native_event_id,
