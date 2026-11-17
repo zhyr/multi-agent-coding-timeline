@@ -1,0 +1,294 @@
+# ==============================================================================
+# multi-agent-coding-timeline / .gitignore
+#
+# 仓库策略：只把源码、配置模板、以及需要公开的骨架文件纳入版本控制。
+# 本地资料、大文件与二进制资产、各类缓存/构建产物、以及任何形式的
+# 密钥凭证，一律不入库。
+#
+# 注意：GitHub 单文件硬上限 100 MB（超过 50 MB 会告警）。
+#       确需版本化的大文件请改用 Git LFS 或外部对象存储，不要靠本文件放行。
+# 验证某条规则是否命中：git check-ignore -v <path>
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. 仓库策略：本地资料 / 内部文档（不入库）
+# ------------------------------------------------------------------------------
+docs/
+# 如将来需要公开一部分文档，用白名单显式放行（父目录被忽略时需逐级解开）：
+# !docs/
+# docs/*
+# !docs/public/
+# !docs/public/**
+
+# ------------------------------------------------------------------------------
+# 2. 本机环境 / 工具私有数据
+# ------------------------------------------------------------------------------
+# 本地 Agent 会话与记忆数据（含本地路径等私有信息，不随仓库公开）
+.workbuddy/
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ------------------------------------------------------------------------------
+# 3. 编辑器 / IDE 本地配置
+# ------------------------------------------------------------------------------
+.idea/
+*.iml
+.vscode/
+.fleet/
+.cursor/
+.history/
+*.sublime-workspace
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+# 团队共享配置可按需放行：
+# !.vscode/extensions.json
+# !.vscode/settings.json
+# !.vscode/tasks.json
+# !.vscode/launch.json
+
+# ------------------------------------------------------------------------------
+# 4. 密钥 / 凭证 / 涉密文件（最高优先级，误提交后必须轮换密钥并清理历史）
+#    规则刻意写得较精确，避免 *.secret* 这类过宽通配误伤源码文件。
+# ------------------------------------------------------------------------------
+# 环境变量
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+.envrc
+.direnv/
+
+# 私钥、证书、签名材料
+*.pem
+*.key
+*.p12
+*.pfx
+*.ppk
+*.jks
+*.keystore
+*.mobileprovision
+id_rsa*
+id_ed25519*
+*_id_rsa
+*_id_dsa
+*.asc
+
+# 平台 / 工具凭证目录与文件
+.ssh/
+.aws/
+.azure/
+.gcloud/
+.gnupg/
+.kube/
+.npmrc
+.pypirc
+.netrc
+.htpasswd
+credentials.json
+token.json
+*.token
+service-account*.json
+*service-account*.json
+google-services.json
+GoogleService-Info.plist
+kubeconfig
+*.kubeconfig
+
+# IaC 状态与变量（常含明文密钥）
+terraform.tfstate
+terraform.tfstate.*
+*.tfvars
+*.tfstate
+
+# ------------------------------------------------------------------------------
+# 5. 大文件 / 二进制资产 / 数据（提交前请先确认体积与许可）
+# ------------------------------------------------------------------------------
+# 压缩包与系统镜像
+*.zip
+*.tar
+*.tgz
+*.tar.gz
+*.gz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.dmg
+*.iso
+*.img
+*.pkg
+*.msi
+*.exe
+*.app
+
+# 编译产物 / 原生库
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.class
+*.wasm
+
+# 音视频与设计稿
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.mp3
+*.wav
+*.flac
+*.aac
+*.psd
+*.ai
+*.sketch
+*.fig
+
+# 数据库 / 数据集 / 模型权重
+*.db
+*.sqlite
+*.sqlite3
+*.mdb
+*.dump
+*.parquet
+*.avro
+*.arrow
+*.feather
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.npy
+*.npz
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.gguf
+*.bin
+*.weights
+# CSV / JSON 数据默认允许提交（本项目的结构化数据资产）；
+# 单个文件超过 50 MB 时请改用 Git LFS：git lfs track "*.csv"
+
+# ------------------------------------------------------------------------------
+# 6. 缓存 / 依赖 / 构建产物
+# ------------------------------------------------------------------------------
+# 通用
+.cache/
+.tmp/
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
+*.rej
+*.pid
+*.seed
+
+# Node / JS / TS / 前端框架
+node_modules/
+.npm/
+.yarn/
+.pnpm-store/
+*.tsbuildinfo
+.eslintcache
+.stylelintcache
+.parcel-cache/
+.turbo/
+.next/
+.nuxt/
+.svelte-kit/
+.vite/
+.webpack/
+dist/
+build/
+out/
+coverage/
+.nyc_output/
+storybook-static/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.ipynb_checkpoints/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+.coverage
+htmlcov/
+
+# Rust（Cargo.lock 对可执行项目应提交，故不忽略）
+target/
+
+# Java / Kotlin / Gradle / Android
+.gradle/
+*.class
+local.properties
+.cxx/
+.captures/
+.externalNativeBuild/
+android/app/build/
+android/.gradle/
+android/local.properties
+
+# iOS / React Native / Expo
+Pods/
+ios/Pods/
+ios/build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.jsbundle
+.expo/
+.expo-shared/
+web-build/
+metro-health-check*
+
+# 测试与报告产物
+playwright-report/
+test-results/
+blob-report/
+junit.xml
+report.html
+
+# ------------------------------------------------------------------------------
+# 7. 日志 / 调试输出
+# ------------------------------------------------------------------------------
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+core
+core.*
+*.core
+crash.log
