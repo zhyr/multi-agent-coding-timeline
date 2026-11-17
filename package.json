@@ -1,0 +1,36 @@
+{
+  "name": "@zhyr/ai-coding-timeline",
+  "version": "1.0.0",
+  "description": "Local-first, read-only CLI for reconstructing a unified, verifiable development timeline across AI coding agents and devices.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "aitimeline": "./bin/aitimeline.mjs"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "docs"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "cli": "node dist/cli/index.js",
+    "verify": "npm run typecheck && npm run test && npm run build"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

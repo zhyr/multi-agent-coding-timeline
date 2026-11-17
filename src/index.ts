@@ -1,0 +1,20 @@
+/** Public library API. The CLI entry point is src/cli/main.ts. */
+export * from './core/constants.js';
+export * from './core/errors.js';
+export * from './core/hash.js';
+export * from './core/ids.js';
+export * from './core/redaction.js';
+export * from './schema/index.js';
+export * from './package/index.js';
+export * from './adapters/types.js';
+export * from './adapters/registry.js';
+export * from './project/identity.js';
+export * from './project/resolver.js';
+export * from './git/scanner.js';
+export * from './git/push-evidence.js';
+export * from './merge/dedup.js';
+export * from './merge/engine.js';
+export * from './scan/engine.js';
+export * from './scan/normalizer.js';
+export * from './viewer/build.js';
+export { CLI_VERSION, createProgram, run as runCli } from './cli/index.js';

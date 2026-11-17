@@ -1,0 +1,191 @@
+import path from 'node:path';
+import { FORMAT, FORMAT_VERSION, SCHEMA_VERSION, SUPPORTED_SCHEMA_VERSIONS, type ContentMode } from '../core/constants.js';
+import { MergeError, UsageError } from '../core/errors.js';
+import { expandHome, nowIso } from '../adapters/util.js';
+import { computeTimelineId } from '../core/ids.js';
+import { verifyProjectCompatibility } from '../project/resolver.js';
+import { deduplicateEvents, mergeById, sortEvents } from './dedup.js';
+import { readPackage, validatePackage, writePackage, validateData, emptyTimeline } from '../package/index.js';
+import type { TimelineData } from '../package/model.js';
+import type { EventRelation, Manifest, MergeReport } from '../schema/entities.js';
+
+export interface MergeOptions {
+  inputs: string[];
+  output: string;
+  force?: boolean;
+  dryRun?: boolean;
+  allowWeakIdentity?: boolean;
+  onProgress?: (message: string) => void;
+}
+
+export interface MergeOutcome {
+  data: TimelineData;
+  report: MergeReport;
+  outputPath: string;
+  dryRun: boolean;
+}
+
+function pickContentMode(modes: ContentMode[]): ContentMode {
+  if (modes.includes('full')) return 'full';
+  if (modes.includes('summary')) return 'summary';
+  return 'metadata_only';
+}
+
+/** Mode C: A+B, extensible to A+B+C+N. Deterministic and idempotent. */
+export async function runMerge(options: MergeOptions): Promise<MergeOutcome> {
+  const progress = options.onProgress ?? (() => undefined);
+  if (!options.inputs || options.inputs.length < 1) {
+    throw new UsageError('merge requires at least one input Timeline Package');
+  }
+  const inputPaths = options.inputs.map((p) => path.resolve(expandHome(p)));
+  const outputPath = path.resolve(expandHome(options.output));
+
+  const packages: TimelineData[] = [];
+  const schemaWarnings: string[] = [];
+  const warnings: string[] = [];
+
+  for (const input of inputPaths) {
+    progress(`Validating input: ${input}`);
+    const check = await validatePackage(input);
+    if (!check.ok) {
+      throw new MergeError(`Input package failed validation: ${input}: ${check.errors.slice(0, 4).join('; ')}`, check.errors);
+    }
+    const { data } = await readPackage(input);
+    if (!SUPPORTED_SCHEMA_VERSIONS.includes(data.manifest.schema_version)) {
+      throw new MergeError(`Unsupported schema version ${data.manifest.schema_version} in ${input}`);
+    }
+    if (data.manifest.format !== FORMAT) {
+      throw new MergeError(`Unexpected package format ${data.manifest.format} in ${input}`);
+    }
+    if (data.manifest.schema_version !== SCHEMA_VERSION || data.manifest.format_version !== FORMAT_VERSION) {
+      schemaWarnings.push(`${input}: version ${data.manifest.format_version}/${data.manifest.schema_version} normalized to ${FORMAT_VERSION}/${SCHEMA_VERSION}`);
+    }
+    packages.push(data);
+  }
+
+  const compatibility = verifyProjectCompatibility(
+    packages.map((p) => ({
+      projectId: p.manifest.project_id,
+      basis: p.manifest.project_identity_basis,
+      strong: p.manifest.project_identity_strong,
+      remoteUrl: p.project.canonical_remote_url,
+      name: p.project.project_name,
+    })),
+    { allowWeakIdentity: options.allowWeakIdentity },
+  );
+  if (!compatibility.ok) {
+    throw new MergeError(`Project identity check failed: ${compatibility.reason}`);
+  }
+
+  const projectId = packages[0]!.manifest.project_id;
+  const project = packages.reduce<TimelineData['project']>((acc, p) => {
+    for (const repo of p.project.repositories) {
+      if (!acc.repositories.some((r) => r.repository_id === repo.repository_id)) acc.repositories.push(repo);
+    }
+    for (const worktree of p.project.worktrees) {
+      if (!acc.worktrees.some((w) => w.worktree_id === worktree.worktree_id)) acc.worktrees.push(worktree);
+    }
+    if (!acc.canonical_remote_url && p.project.canonical_remote_url) acc.canonical_remote_url = p.project.canonical_remote_url;
+    return acc;
+  }, {
+    ...packages[0]!.project,
+    repositories: [...packages[0]!.project.repositories],
+    worktrees: [...packages[0]!.project.worktrees],
+  });
+
+  const inputEvents = packages.reduce((n, p) => n + p.events.length, 0);
+  const inputTimelineIds = packages.map((p) => p.manifest.timeline_id).sort();
+  const dedup = deduplicateEvents(
+    packages.flatMap((p) => p.events),
+    inputTimelineIds,
+  );
+  const events = sortEvents(dedup.events);
+  const eventIds = new Set(events.map((e) => e.event_id));
+
+  const relations: EventRelation[] = mergeById(
+    packages.map((p) => p.relations),
+    (r) => r.relation_id,
+  ).filter((r) => eventIds.has(r.from_event_id) && eventIds.has(r.to_event_id));
+  const unresolvedRelations =
+    packages.reduce((n, p) => n + p.relations.length, 0) - relations.length;
+
+  const data = emptyTimeline();
+  data.project = project;
+  data.devices = mergeById(packages.map((p) => p.devices), (d) => d.device_id);
+  data.agents = mergeById(packages.map((p) => p.agents), (a) => a.agent_id);
+  data.sessions = mergeById(packages.map((p) => p.sessions), (s) => s.session_id);
+  data.tasks = mergeById(packages.map((p) => p.tasks), (t) => t.task_id);
+  data.events = events;
+  data.relations = relations;
+  data.commits = mergeById(packages.map((p) => p.commits), (c) => c.commit_sha);
+  data.pushes = mergeById(packages.map((p) => p.pushes), (p) => p.push_id);
+  data.sources = mergeById(packages.map((p) => p.sources), (s) => s.source_id);
+  data.conflicts = mergeById(
+    [...packages.map((p) => p.conflicts), dedup.conflicts],
+    (c) => `${c.dedup_key}:${c.variant_event_id}`,
+  );
+
+  const sourceDevices = [...new Set(data.devices.filter((d) => d.role !== 'scanner').map((d) => d.device_id))].sort();
+  if (sourceDevices.length === 0) {
+    warnings.push('No source device metadata found in inputs; using manifest source_devices');
+    sourceDevices.push(...new Set(packages.flatMap((p) => p.manifest.source_devices)));
+  }
+
+  const manifest: Manifest = {
+    format: FORMAT,
+    format_version: FORMAT_VERSION,
+    schema_version: SCHEMA_VERSION,
+    timeline_id: computeTimelineId('merge', projectId, inputTimelineIds),
+    project_id: projectId,
+    project_name: project.project_name,
+    created_at: nowIso(),
+    operation: 'merge',
+    source_devices: sourceDevices,
+    input_timelines: inputTimelineIds,
+    event_count: events.length,
+    session_count: data.sessions.length,
+    agent_count: data.agents.length,
+    git_commit_count: data.commits.length,
+    content_mode: pickContentMode(packages.map((p) => p.manifest.content_mode)),
+    project_identity_basis: project.identity_basis,
+    project_identity_strong: project.identity_strong,
+    generator: { name: 'aitimeline', version: '1.0.0' },
+  };
+  data.manifest = manifest;
+
+  const report: MergeReport = {
+    operation: 'merge',
+    project_id: projectId,
+    input_timelines: packages.length,
+    source_devices: sourceDevices.length,
+    input_events: inputEvents,
+    merged_events: events.length,
+    duplicate_events: dedup.duplicates,
+    conflict_events: dedup.conflicts.length,
+    unresolved_relations: Math.max(0, unresolvedRelations),
+    schema_warnings: schemaWarnings,
+    project_identity_status: compatibility.status,
+    input_timeline_ids: inputTimelineIds,
+    input_paths: inputPaths,
+    completed_at: nowIso(),
+    warnings,
+  };
+  data.mergeReport = report;
+
+  const validation = validateData(data);
+  if (!validation.ok) {
+    throw new MergeError(`Merged package failed internal validation: ${validation.errors.slice(0, 5).join('; ')}`, validation.errors);
+  }
+  warnings.push(...validation.warnings);
+  data.mergeReport = report;
+
+  if (!options.dryRun) {
+    await writePackage(outputPath, data, { overwrite: options.force ?? false });
+    progress(`Wrote unified Timeline Package: ${outputPath}`);
+  } else {
+    progress('Dry run: no files written');
+  }
+  progress(`Events: ${inputEvents} in -> ${events.length} out (${dedup.duplicates} duplicates, ${dedup.conflicts.length} conflicts preserved)`);
+
+  return { data, report, outputPath, dryRun: !!options.dryRun };
+}
