@@ -4,7 +4,8 @@ import { CursorAdapter } from './cursor.js';
 import { QoderAdapter } from './qoder.js';
 import { WorkBuddyAdapter } from './workbuddy.js';
 import { TraeAdapter } from './trae.js';
-import { CodeBuddyAdapter, OpenCodeAdapter, ZCodeAdapter } from './limited-adapters.js';
+import { CodeBuddyAdapter, ZCodeAdapter } from './limited-adapters.js';
+import { OpenCodeAdapter } from './opencode.js';
 import type { AgentAdapter } from './types.js';
 import { UsageError } from '../core/errors.js';
 

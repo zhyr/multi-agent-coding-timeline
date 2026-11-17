@@ -453,7 +453,10 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
   // ---- Read-only Git scan ----
   const git = await scanGit({ projectPath, projectId, deviceId: sourceDeviceId, maxCommits: options.maxCommits });
   report.warnings.push(...git.warnings);
-  report.errors.push(...git.errors);
+  // A directory without Git is explicitly supported, so "not a git repository"
+  // must not turn a successful scan into a SCAN_FAILED exit (5).
+  if (git.info.isGitRepository) report.errors.push(...git.errors);
+  else report.warnings.push(...git.errors);
   for (const commit of git.commits) {
     allEvents.push(
       normalizeGitCommit({
@@ -605,6 +608,10 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
     throw new ScanError(`Generated package failed internal validation: ${validation.errors.slice(0, 5).join('; ')}`, validation.errors);
   }
   report.warnings.push(...validation.warnings);
+  // The same repository condition can be reported by identity resolution and by
+  // the Git scanner; keep one copy so reports stay readable.
+  report.warnings = [...new Set(report.warnings)];
+  report.errors = [...new Set(report.errors)];
   // Report must be re-embedded after warnings were appended.
   data.scanReport = report;
 

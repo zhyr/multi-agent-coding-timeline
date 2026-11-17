@@ -161,7 +161,7 @@ Every event carries `evidence.level` — `verified`, `agent_reported`, `inferred
 | `claude-code` | not testable | 0 | no local `~/.claude/projects`; synthetic fixtures only |
 | `codebuddy` | discovery only | 0 | directory observed, no verified session format |
 | `zcode` | not testable | 0 | no local installation |
-| `opencode` | not testable | 0 | configuration only, no session data |
+| `opencode` | partially verified | 1 | `project/session/message/part` JSON; text parts only, no tool parts observed |
 
 Details and per-field capability levels: [docs/agent-adapters.md](docs/agent-adapters.md).
 
@@ -200,8 +200,9 @@ performed separately, read-only, and is documented with counts in
   as a source error; it never fabricates events.
 - Cursor transcript records carry no timestamps, so their `occurred_at` is empty and
   sorting falls back to `observed_at`.
-- Claude Code, ZCode and OpenCode have no locally verified parser; they are not claimed as
-  supported.
+- Claude Code and ZCode have no locally verified parser; they are not claimed as supported.
+  CodeBuddy is discovery-only. OpenCode is verified for sessions/messages/text, but its tool
+  and file-change records have not been observed.
 - The 3-way "A+B+C" merge is the same operation as 2-way merge: it is deterministic and
   idempotent, but Git push evidence remains per-device and is never synthesized.
 - Only manual runs are supported. Incremental state stores fingerprints only; unchanged
@@ -368,7 +369,7 @@ integrity/checksums.sha256
 | `claude-code` | not testable | 0 | 本机无 `~/.claude/projects`，仅用合成样本测试 |
 | `codebuddy` | discovery only | 0 | 只观察到目录，未验证会话格式 |
 | `zcode` | not testable | 0 | 本机未安装 |
-| `opencode` | not testable | 0 | 仅有配置，无会话数据 |
+| `opencode` | partially verified | 1 | `project/session/message/part` JSON；仅观察到 text part，未观察到工具调用 |
 
 字段级能力等级与实现细节见 [docs/agent-adapters.md](docs/agent-adapters.md)。
 
@@ -405,7 +406,8 @@ npm run verify      # typecheck + 测试 + 构建
 - Agent 的数据格式并非公开契约，可能随时变化。解析失败会作为数据源错误上报，绝不会
   凭空构造事件。
 - Cursor 的转录记录没有时间戳，因此其 `occurred_at` 为空，排序时回退到 `observed_at`。
-- Claude Code、ZCode、OpenCode 在本机没有经过验证的解析器，因此不宣称已支持。
+- Claude Code、ZCode 在本机没有经过验证的解析器，因此不宣称已支持；CodeBuddy 仅做到目录发现。
+  OpenCode 已验证会话/消息/文本解析，但其工具调用与文件变更记录尚未观察到。
 - “A+B+C” 三方合并与两方合并是同一套操作：结果确定且幂等；但 Git 推送证据始终按设备
   独立记录，不会被合成。
 - 仅支持手动执行。增量状态只保存文件指纹：未变化的会话文件复用上一次包中的结果，一旦

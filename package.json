@@ -4,6 +4,15 @@
   "description": "Local-first, read-only CLI for reconstructing a unified, verifiable development timeline across AI coding agents and devices.",
   "type": "module",
   "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
     "aitimeline": "./bin/aitimeline.mjs"
   },
@@ -21,7 +30,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "cli": "node dist/cli/index.js",
+    "cli": "node dist/cli/main.js",
+    "prepack": "npm run build",
     "verify": "npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {

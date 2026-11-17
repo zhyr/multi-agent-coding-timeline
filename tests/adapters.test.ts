@@ -8,7 +8,8 @@ import { ClaudeCodeAdapter } from '../src/adapters/claude-code.js';
 import { CursorAdapter } from '../src/adapters/cursor.js';
 import { WorkBuddyAdapter } from '../src/adapters/workbuddy.js';
 import { TraeAdapter } from '../src/adapters/trae.js';
-import { CodeBuddyAdapter, ZCodeAdapter, OpenCodeAdapter } from '../src/adapters/limited-adapters.js';
+import { CodeBuddyAdapter, ZCodeAdapter } from '../src/adapters/limited-adapters.js';
+import { OpenCodeAdapter } from '../src/adapters/opencode.js';
 import { summarizeAdapters } from '../src/adapters/registry.js';
 import type { AgentSource, SessionReference } from '../src/adapters/types.js';
 import {
@@ -219,7 +220,7 @@ describe('WorkBuddy / TRAE adapters (partial formats)', () => {
 
 describe('Discovery-only adapters and honest capability declarations', () => {
   it('never fabricate sessions for unverified formats', async () => {
-    for (const adapter of [new CodeBuddyAdapter(), new ZCodeAdapter(), new OpenCodeAdapter()]) {
+    for (const adapter of [new CodeBuddyAdapter(), new ZCodeAdapter()]) {
       expect(await adapter.scanSessions(sourceFor(adapter.id))).toEqual([]);
       const parsed = await adapter.parseSession(sessionFor('none.jsonl', adapter.id));
       expect(parsed.records).toEqual([]);
@@ -229,7 +230,7 @@ describe('Discovery-only adapters and honest capability declarations', () => {
 
   it('does not claim verified parsing for unverified agents', () => {
     const all = summarizeAdapters();
-    const limited = all.filter((a) => ['codebuddy', 'zcode', 'opencode', 'claude-code'].includes(a.id));
+    const limited = all.filter((a) => ['codebuddy', 'zcode', 'claude-code'].includes(a.id));
     for (const a of limited) {
       expect(a.verification).not.toBe('verified');
       expect(a.capabilities.user_request).not.toBe('verified');

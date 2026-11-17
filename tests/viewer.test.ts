@@ -132,4 +132,37 @@ describe('viewer', () => {
     expect(rendered?.confidence).toBe(0.6);
     expect(rendered?.matchConfidence).toBe('candidate');
   });
+
+  it('keeps all events in the embedded model but paginates the rendered list', () => {
+    const events = Array.from({ length: 1_000 }, (_, i) =>
+      makeEvent({
+        event_id: `evt_${String(i).padStart(4, '0')}`,
+        dedup_key: `dedup_${i}`,
+        time: {
+          occurred_at: new Date(Date.UTC(2026, 0, 1, 0, 0, 0) + i * 1000).toISOString(),
+          observed_at: '2026-11-17T00:00:00.000Z',
+        },
+      }),
+    );
+    const model = buildViewerModel(makeTimelineData({ events }));
+    expect(model.events).toHaveLength(1_000);
+    const html = renderTimelineHtml(makeTimelineData({ events }));
+    expect(html).toContain('evt_0999');
+    expect(html).toContain('var PAGE=300');
+    expect(html).toContain('Show more (');
+  });
+
+  it('contains no network APIs or external resource references', () => {
+    const html = renderTimelineHtml(sampleData());
+    expect(html).not.toMatch(/\bfetch\s*\(/);
+    expect(html).not.toMatch(/XMLHttpRequest|WebSocket|EventSource/);
+    expect(html).not.toMatch(/(src|href)="https?:\/\//);
+    expect(html).toContain("default-src 'none'");
+  });
+
+  it('escapes an injected document title', () => {
+    const html = renderTimelineHtml(sampleData(), { title: '</title><script>alert(1)</script>' });
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).toContain('&lt;/title&gt;');
+  });
 });

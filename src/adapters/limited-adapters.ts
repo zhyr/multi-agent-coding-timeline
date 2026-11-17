@@ -60,14 +60,6 @@ const ZCODE: DiscoverySpec = {
   format: 'unknown',
 };
 
-const OPENCODE: DiscoverySpec = {
-  agentId: 'opencode',
-  defaultDirs: ['~/.config/opencode', '~/.local/share/opencode', '~/.opencode'],
-  markers: ['opencode.json', 'storage', 'project'],
-  childNames: ['opencode', '.opencode'],
-  format: 'unknown',
-};
-
 function limitedCapabilities(notes: string[], verification: AdapterCapabilities['verification']): AdapterCapabilities {
   return makeCapabilities({
     discovery: verification === 'discovery_only' ? 'verified' : 'partial',
@@ -93,16 +85,6 @@ export class ZCodeAdapter extends LimitedAdapter {
       'No ~/.zcode directory exists on this machine; the data format is unknown.',
       'An explicit --source-root is accepted but yields no sessions until a real format is observed.',
       'Not implemented / not testable in the current environment.',
-    ], 'not_testable'));
-  }
-}
-
-export class OpenCodeAdapter extends LimitedAdapter {
-  constructor() {
-    super('opencode', 'OpenCode', '0.1.0', OPENCODE, limitedCapabilities([
-      'Real local directory observed: ~/.config/opencode contains only opencode.json (configuration).',
-      'No session data is present, so the parser is not implemented.',
-      'Listed as an extension target; not a compatibility claim.',
     ], 'not_testable'));
   }
 }
