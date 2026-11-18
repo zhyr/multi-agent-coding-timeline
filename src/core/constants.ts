@@ -41,6 +41,8 @@ export const EVENT_TYPES = [
   'agent.user_request.submitted',
   'agent.ai_request.submitted',
   'agent.response.received',
+  /** Generic imported message rows (Al-exporter archives). */
+  'agent.message.recorded',
   'agent.execution.started',
   'agent.execution.completed',
   'agent.execution.failed',

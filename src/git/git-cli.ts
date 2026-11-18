@@ -50,8 +50,10 @@ export const GIT_READ_ONLY_COMMANDS = {
     '--no-renames',
     '--format=%x1e%H%x1f%P%x1f%aI%x1f%cI%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1f%D%x1f%s',
   ],
-  remoteRefs: ['for-each-ref', '--format=%(refname)%x1f%(objectname)', 'refs/remotes'],
+  remoteRefs: ['for-each-ref', '--format=%(refname)%09%(objectname)', 'refs/remotes'],
   localBranches: ['for-each-ref', '--format=%(refname:short)', 'refs/heads'],
-  reflog: ['reflog', '--all', '--format=%H%x1f%gs'],
+  // %gD with --date=iso-strict yields `refs/remotes/<name>@{<ISO-8601>}`:
+  // the selector identifies the ref and the timestamp of the reflog entry.
+  reflog: ['reflog', '--all', '--date=iso-strict', '--format=%H%x1f%gs%x1f%gD'],
   status: ['status', '--porcelain=v1'],
 } as const;

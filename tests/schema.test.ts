@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFile, writeFile, rm } from 'node:fs/promises';
+import { readFile, writeFile, rm, mkdir, symlink, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { writePackage, readPackage, validatePackage, validateData } from '../src/package/index.js';
 import { ActivityEventSchema, ManifestSchema } from '../src/schema/entities.js';
@@ -141,6 +141,35 @@ describe('Timeline schema and package', () => {
     await writePackage(pkg, makeTimelineData());
     await expect(writePackage(pkg, makeTimelineData())).rejects.toThrow(/not empty/i);
     await expect(writePackage(pkg, makeTimelineData(), { overwrite: true })).resolves.toBeDefined();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('--force removes stale files left by a previous operation', async () => {
+    const dir = await tempDir();
+    const pkg = path.join(dir, 'pkg');
+    await writePackage(pkg, makeTimelineData());
+    // Files that no writer in this codebase ever emits, simulating leftovers
+    // from an earlier operation on the same output directory.
+    await writeFile(path.join(pkg, 'reports/stale-scan-report.json'), '{}\n');
+    await writeFile(path.join(pkg, 'sources/stale-scan-inputs.json'), '{}\n');
+    const result = await writePackage(pkg, makeTimelineData(), { overwrite: true });
+    expect(result.files).not.toContain('reports/stale-scan-report.json');
+    expect(await readdir(path.join(pkg, 'reports'))).not.toContain('stale-scan-report.json');
+    expect(await readdir(path.join(pkg, 'sources'))).not.toContain('stale-scan-inputs.json');
+    expect((await validatePackage(pkg)).ok).toBe(true);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('refuses to write through a symlinked output subdirectory', async () => {
+    const dir = await tempDir();
+    const pkg = path.join(dir, 'pkg');
+    const outside = path.join(dir, 'outside');
+    await mkdir(outside, { recursive: true });
+    await mkdir(pkg, { recursive: true });
+    await writeFile(path.join(pkg, 'manifest.json'), '{}\n');
+    await symlink(outside, path.join(pkg, 'git'));
+    await expect(writePackage(pkg, makeTimelineData(), { overwrite: true })).rejects.toThrow(/symlink/i);
+    expect(await readdir(outside)).toEqual([]);
     await rm(dir, { recursive: true, force: true });
   });
 });

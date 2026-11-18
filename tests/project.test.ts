@@ -57,6 +57,23 @@ describe('Project Resolver', () => {
     expect(result.include).toBe(true);
   });
 
+  it('Strong Match: a cwd inside the worktree is enough', () => {
+    const result = matchSessionToProject({ cwd: path.join(projectPath, 'src', 'deep') }, identity);
+    expect(result.confidence).toBe('strong');
+    expect(result.include).toBe(true);
+  });
+
+  it('does not strongly match an ancestor cwd to a nested project', () => {
+    const ancestor = path.dirname(projectPath);
+    const result = matchSessionToProject(
+      { cwd: ancestor, nativeProjectId: ancestor },
+      identity,
+    );
+    expect(result.confidence).toBe('candidate');
+    expect(result.include).toBe(false);
+    expect(result.reasons.some((reason) => reason.includes('ancestor'))).toBe(true);
+  });
+
   it('Candidate Match: path/name-only evidence is never auto-included', () => {
     const result = matchSessionToProject({ cwd: '/somewhere/else/fixture-project' }, identity);
     expect(result.confidence).toBe('candidate');

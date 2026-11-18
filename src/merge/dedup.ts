@@ -28,6 +28,72 @@ export interface DedupResult {
 /** Capture method written by the Al-exporter import adapter. */
 const IMPORT_CAPTURE_METHOD = 'adapter:al-exporter';
 
+interface EmbeddedImportSource {
+  event_id: string;
+  dedup_key: string;
+  capture_method?: string;
+  source_path?: string;
+  source_path_identity?: string;
+  source_record_id?: string;
+  source_line?: number;
+  raw_payload_ref?: string;
+  source_hash?: string;
+  content_hash?: string;
+  content_diverged: boolean;
+}
+
+function asOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+/**
+ * Fold an Al-exporter import into its native counterpart while carrying the
+ * import-side source references on the surviving event. The imported event is
+ * not shipped, so a bare event id would be a dangling pointer. A differing
+ * content hash is recorded explicitly instead of being silently discarded.
+ */
+function attachFoldedImport(
+  native: ActivityEvent,
+  imported: ActivityEvent,
+  note: string,
+  matchConfidence: 'exact' | 'candidate' = 'exact',
+): ActivityEvent {
+  const p = imported.provenance as Record<string, unknown>;
+  const diverged = native.content_hash !== imported.content_hash;
+  const embedded: EmbeddedImportSource = {
+    event_id: imported.event_id,
+    dedup_key: imported.dedup_key,
+    capture_method: asOptionalString(p.capture_method),
+    source_path: asOptionalString(p.source_path),
+    source_path_identity: asOptionalString(p.source_path_identity),
+    source_record_id: asOptionalString(p.source_record_id),
+    source_line: typeof p.source_line === 'number' ? p.source_line : undefined,
+    raw_payload_ref: asOptionalString(p.raw_payload_ref),
+    source_hash: asOptionalString(p.source_hash),
+    content_hash: imported.content_hash,
+    content_diverged: diverged,
+  };
+  const fullNote = diverged
+    ? `${note}; imported content differs (import content_hash=${imported.content_hash ?? 'absent'}) — divergence recorded, not discarded`
+    : note;
+  const prior = native.provenance.paired_import_sources as EmbeddedImportSource[] | undefined;
+  const provenance: Record<string, unknown> = { ...(native.provenance as Record<string, unknown>) };
+  delete provenance.paired_import_event_id; // legacy dangling pointer
+  return {
+    ...native,
+    correlation: native.correlation
+      ? {
+          ...native.correlation,
+          note: native.correlation.note ? `${native.correlation.note}; ${fullNote}` : fullNote,
+        }
+      : { kind: 'strongly_supported', match_confidence: matchConfidence, note: fullNote },
+    provenance: {
+      ...provenance,
+      paired_import_sources: [...(Array.isArray(prior) ? prior : []), embedded],
+    } as unknown as ActivityEvent['provenance'],
+  };
+}
+
 /** Deterministic ordering for both scan and merge. */
 export function sortEvents(events: ActivityEvent[]): ActivityEvent[] {
   return [...events].sort((a, b) => {
@@ -173,7 +239,7 @@ function foldDeterministicImports(events: readonly ActivityEvent[]): {
   if (nativeByIdentity.size === 0) return empty;
 
   const consumed = new Set<ActivityEvent>();
-  const importIdByNative = new Map<string, string>();
+  const importsByNative = new Map<string, ActivityEvent>();
   const pairedNative = new Set<ActivityEvent>();
   for (const event of imported) {
     if (event.provenance.import_identity_source !== 'message_id') continue;
@@ -184,31 +250,22 @@ function foldDeterministicImports(events: readonly ActivityEvent[]): {
     nativeByIdentity.delete(key);
     consumed.add(event);
     pairedNative.add(native);
-    importIdByNative.set(native.event_id, event.event_id);
+    importsByNative.set(native.event_id, event);
   }
   if (consumed.size === 0) return empty;
 
   const output: ActivityEvent[] = [];
   for (const event of events) {
     if (consumed.has(event)) continue;
-    const importId = importIdByNative.get(event.event_id);
-    if (!importId) {
+    const pairedImport = importsByNative.get(event.event_id);
+    if (!pairedImport) {
       output.push(event);
       continue;
     }
     const note =
-      `deterministic pairing with Al-exporter import ${importId}: same agent, ` +
+      `deterministic pairing with Al-exporter import ${pairedImport.event_id}: same agent, ` +
       'native session id and native message id';
-    output.push({
-      ...event,
-      correlation: event.correlation
-        ? {
-            ...event.correlation,
-            note: event.correlation.note ? `${event.correlation.note}; ${note}` : note,
-          }
-        : { kind: 'strongly_supported', match_confidence: 'exact', note },
-      provenance: { ...event.provenance, paired_import_event_id: importId },
-    });
+    output.push(attachFoldedImport(event, pairedImport, note));
   }
   return { events: output, deterministicPairs: consumed.size, pairedNative };
 }
@@ -278,7 +335,7 @@ function foldLineIdentityImports(
   }
 
   const consumed = new Set<ActivityEvent>();
-  const importIdByNative = new Map<string, string>();
+  const importsByNative = new Map<string, ActivityEvent>();
   const pairedNative = new Set<ActivityEvent>();
   for (const event of imported) {
     const key = sourceLineIdentityKey(event, true);
@@ -288,31 +345,22 @@ function foldLineIdentityImports(
     if (!native || native.length !== 1) continue;
     consumed.add(event);
     pairedNative.add(native[0]!);
-    importIdByNative.set(native[0]!.event_id, event.event_id);
+    importsByNative.set(native[0]!.event_id, event);
   }
   if (consumed.size === 0) return { events: [...events], linePairs: 0 };
 
   const output: ActivityEvent[] = [];
   for (const event of events) {
     if (consumed.has(event)) continue;
-    const importId = importIdByNative.get(event.event_id);
-    if (!importId) {
+    const pairedImport = importsByNative.get(event.event_id);
+    if (!pairedImport) {
       output.push(event);
       continue;
     }
     const note =
-      `deterministic pairing with Al-exporter import ${importId}: same agent, ` +
+      `deterministic pairing with Al-exporter import ${pairedImport.event_id}: same agent, ` +
       `source file and line ${event.provenance.source_line}`;
-    output.push({
-      ...event,
-      correlation: event.correlation
-        ? {
-            ...event.correlation,
-            note: event.correlation.note ? `${event.correlation.note}; ${note}` : note,
-          }
-        : { kind: 'strongly_supported', match_confidence: 'exact', note },
-      provenance: { ...event.provenance, paired_import_event_id: importId },
-    });
+    output.push(attachFoldedImport(event, pairedImport, note));
   }
   return { events: output, linePairs: consumed.size };
 }
@@ -360,7 +408,7 @@ function pairImportedEvents(events: ActivityEvent[]): { events: ActivityEvent[];
   }
 
   const consumed = new Set<ActivityEvent>();
-  const paired = new Map<string, string>();
+  const paired = new Map<string, ActivityEvent>();
   for (const event of imported) {
     const key = pairingFingerprint(event);
     if (!key) continue;
@@ -368,7 +416,7 @@ function pairImportedEvents(events: ActivityEvent[]): { events: ActivityEvent[];
     if (!native) continue;
     nativeByKey.delete(key);
     consumed.add(event);
-    paired.set(native.event_id, event.event_id);
+    paired.set(native.event_id, event);
   }
   if (paired.size === 0) return { events, inferredPairs: 0 };
 
@@ -378,24 +426,15 @@ function pairImportedEvents(events: ActivityEvent[]): { events: ActivityEvent[];
       if (!consumed.has(event)) output.push(event);
       continue;
     }
-    const importId = paired.get(event.event_id);
-    if (!importId) {
+    const pairedImport = paired.get(event.event_id);
+    if (!pairedImport) {
       output.push(event);
       continue;
     }
     const note =
-      `inferred pairing with Al-exporter import ${importId}: same agent, session id, event type, ` +
+      `inferred pairing with Al-exporter import ${pairedImport.event_id}: same agent, session id, event type, ` +
       'time and content; the records are not confirmed identical';
-    output.push({
-      ...event,
-      correlation: event.correlation
-        ? {
-            ...event.correlation,
-            note: event.correlation.note ? `${event.correlation.note}; ${note}` : note,
-          }
-        : { kind: 'strongly_supported', match_confidence: 'candidate', note },
-      provenance: { ...event.provenance, paired_import_event_id: importId },
-    });
+    output.push(attachFoldedImport(event, pairedImport, note, 'candidate'));
   }
   return { events: output, inferredPairs: paired.size };
 }

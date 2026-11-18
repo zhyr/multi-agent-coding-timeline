@@ -45,6 +45,44 @@ function payloadOf(record: Record<string, unknown>): Record<string, unknown> {
   return p && typeof p === 'object' ? (p as Record<string, unknown>) : {};
 }
 
+const ENVIRONMENT_CONTEXT = /<environment_context>[\s\S]*?<\/environment_context>/gi;
+// Codex injects repository guidance as an `# AGENTS.md instructions for <path>`
+// header followed by a paired `<INSTRUCTIONS>...</INSTRUCTIONS>` block. It is
+// harness metadata, never a user request.
+const AGENTS_INSTRUCTIONS =
+  /(?:^|\n)#\s*AGENTS\.md instructions for[^\n]*\n?[\s\S]*?<INSTRUCTIONS>[\s\S]*?<\/INSTRUCTIONS>/gi;
+const INSTRUCTIONS_BLOCK = /<INSTRUCTIONS>[\s\S]*?<\/INSTRUCTIONS>/gi;
+// IDE context is injected as a single `input_text` block beginning with
+// `# Context from my IDE setup:`; the real user text follows a stable
+// `## My request for Codex:` separator (observed 161/161 in local corpora).
+const IDE_CONTEXT_HEADER = /^\s*#\s*Context from my IDE setup:/i;
+const CODEX_REQUEST_SEPARATOR = /##\s*My request for Codex:\s*/i;
+
+/**
+ * Strip Codex/IDE harness metadata from a user turn so that only the real
+ * request becomes an event body. Handles three observed injections:
+ *   1. `<environment_context>...</environment_context>` (cwd/env metadata)
+ *   2. `# AGENTS.md instructions ... <INSTRUCTIONS>...</INSTRUCTIONS>`
+ *   3. `# Context from my IDE setup: ... ## My request for Codex: <real text>`
+ * For (3) the injected context is dropped but the genuine request after the
+ * separator is preserved, so no user content is lost.
+ */
+function stripEnvironmentContext(text: string): string {
+  let out = text;
+
+  // IDE context block: keep only the request after the separator if present.
+  if (IDE_CONTEXT_HEADER.test(out)) {
+    const sep = CODEX_REQUEST_SEPARATOR.exec(out);
+    out = sep ? out.slice(sep.index + sep[0].length) : '';
+  }
+
+  out = out
+    .replace(AGENTS_INSTRUCTIONS, '')
+    .replace(INSTRUCTIONS_BLOCK, '')
+    .replace(ENVIRONMENT_CONTEXT, '');
+  return out.trim();
+}
+
 export class CodexAdapter implements AgentAdapter {
   readonly id = 'codex';
   readonly name = 'OpenAI Codex';
@@ -127,19 +165,22 @@ export class CodexAdapter implements AgentAdapter {
 
       if (type === 'response_item') {
         const role = typeof payload.role === 'string' ? payload.role : '';
-        const { text: body, nonText } = extractContent(payload.content);
-        if (role === 'user' || (role === 'assistant' && body)) {
+        const extracted = extractContent(payload.content);
+        const isUser = role === 'user';
+        const isAssistant = role === 'assistant';
+        const body = isUser ? stripEnvironmentContext(extracted.text) : extracted.text;
+        if ((isUser || isAssistant) && body) {
           records.push({
             ...base,
-            event_type: role === 'user' ? 'agent.user_request.submitted' : 'agent.response.received',
+            event_type: isUser ? 'agent.user_request.submitted' : 'agent.response.received',
             native_event_id: sourceRecordId,
             role,
-            content: body || undefined,
+            content: body,
             model: typeof payload.model === 'string' ? payload.model : model,
           });
           sequence += 1;
         }
-        for (const block of nonText) {
+        for (const block of extracted.nonText) {
           if (/function_call|tool_use|computer_call/i.test(block.type)) {
             records.push({
               ...base,
@@ -224,7 +265,7 @@ export class CodexAdapter implements AgentAdapter {
       agent_response: 'verified',
       tool_calls: 'partial',
       task_status: 'partial',
-      project_identity: 'verified',
+      project_identity: 'partial',
       timestamps: 'verified',
       incremental_scan: 'verified',
       ai_request: 'unavailable',
@@ -233,8 +274,9 @@ export class CodexAdapter implements AgentAdapter {
       formats: ['jsonl', 'jsonl.zst'],
       verification: 'verified',
       notes: [
-        'Real local format observed: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl.zst (212 archives inspected structurally).',
-        'session_meta.payload.cwd provides strong project association.',
+        'Real local format observed: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl.zst (214 archives inspected structurally).',
+        'response_item.content uses input_text/output_text blocks; input_image and encrypted_content are non-text.',
+        'session_meta.payload.cwd is a path signal only: a cwd inside the worktree is strong, an ancestor cwd is candidate.',
         'task_complete is stored as agent_reported, never as a verified execution fact.',
         'Raw model request bodies are not present in rollout files; ai_request is unavailable.',
         'history.jsonl / session_index.jsonl are indexes, not parsed to avoid duplicate events.',

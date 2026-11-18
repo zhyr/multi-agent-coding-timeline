@@ -499,7 +499,13 @@ describe('Al-exporter import adapter', () => {
     expect(paired.inferred_pairs).toBe(1);
     const kept = paired.events[0]!;
     expect(kept.provenance.capture_method).toBe('adapter:cursor');
-    expect(kept.provenance.paired_import_event_id).toBeTruthy();
+    expect(kept.provenance.paired_import_sources).toHaveLength(1);
+    expect(kept.provenance.paired_import_sources?.[0]).toMatchObject({
+      source_path: 'export/cursor/x.json',
+      source_record_id: 'import-1',
+      capture_method: 'adapter:al-exporter',
+    });
+    expect(kept.provenance.paired_import_event_id).toBeUndefined();
     expect(kept.correlation?.match_confidence).toBe('candidate');
     expect(kept.correlation?.note).toMatch(/inferred pairing/);
     expect(kept.evidence.level).toBe('verified');
@@ -824,7 +830,8 @@ describe('Al-exporter import adapter', () => {
     expect(deterministic.deterministic_pairs).toBe(1);
     expect(deterministic.inferred_pairs).toBe(0);
     expect(deterministic.events[0]!.provenance.capture_method).toBe('adapter:cursor');
-    expect(deterministic.events[0]!.provenance.paired_import_event_id).toBeTruthy();
+    expect(deterministic.events[0]!.provenance.paired_import_sources?.[0]?.event_id).toBe(imported.event_id);
+    expect(deterministic.events[0]!.provenance.paired_import_event_id).toBeUndefined();
     expect(deterministic.events[0]!.correlation?.note).toMatch(/deterministic pairing/);
     expect(deterministic.events[0]!.correlation?.match_confidence).toBe('exact');
 

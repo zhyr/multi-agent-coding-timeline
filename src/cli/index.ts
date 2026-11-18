@@ -85,9 +85,13 @@ export function createProgram(): { program: Command; getExitCode: () => number }
         explicitRemoteUrl: opts.remoteUrl,
         onProgress: (m) => progressLine(quiet, m),
       });
+      const r = outcome.report;
+      // The exit code must be identical in text and --json mode; otherwise CI
+      // consumers of the machine-readable output cannot detect a failed scan.
+      if (r.errors.length) exitCode = EXIT.SCAN_FAILED;
       if (json) {
         printJson({
-          ok: true,
+          ok: r.errors.length === 0,
           operation: 'scan',
           dry_run: outcome.dryRun,
           output: outcome.outputPath,
@@ -97,7 +101,6 @@ export function createProgram(): { program: Command; getExitCode: () => number }
           report: outcome.report,
         });
       } else {
-        const r = outcome.report;
         process.stdout.write(
           `Scan ${outcome.dryRun ? '(dry run) ' : ''}complete\n` +
             `  output:            ${outcome.outputPath}\n` +
@@ -109,7 +112,8 @@ export function createProgram(): { program: Command; getExitCode: () => number }
             `  sources:           ${r.sources_discovered} discovered, ${r.sources_scanned} scanned, ` +
             `${r.sources_skipped_unchanged} unchanged, ${r.sources_failed} failed\n` +
             `  sessions:          ${r.sessions_discovered} discovered, ${r.sessions_matched} matched, ` +
-            `${r.sessions_candidate_only} candidate-only\n` +
+            `${r.sessions_reused_unchanged} reused unchanged, ${r.sessions_candidates_included} candidates explicitly included, ` +
+            `${r.sessions_candidate_only} candidate-only excluded\n` +
             `  events:            ${r.events_extracted} extracted, ${r.events_rejected} rejected/excluded, ` +
             `${outcome.data.events.length} final\n` +
             `  git:               ${r.git_commits} commits, ${r.git_pushes} evidenced pushes\n` +

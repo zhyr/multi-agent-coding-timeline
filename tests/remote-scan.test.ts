@@ -171,7 +171,9 @@ describe('Mode B: Remote Source Scan', () => {
     expect(strict.report.candidates?.some((c) => c.native_session_id.includes('unrelated'))).toBe(true);
     expect(strict.data.events.some((e) => e.provenance.source_record_id?.includes('unrelated'))).toBe(false);
     const permissive = await runScan({ ...base, output: path.join(ctx.root, 'permissive'), includeCandidates: true });
-    expect(permissive.report.sessions_matched).toBeGreaterThan(strict.report.sessions_matched);
+    // Explicitly included candidates are counted separately, never as matches.
+    expect(permissive.report.sessions_matched).toBe(strict.report.sessions_matched);
+    expect(permissive.report.sessions_candidates_included).toBeGreaterThan(0);
     expect(permissive.data.events.some((e) => e.correlation?.note?.includes('candidate'))).toBe(true);
   });
 

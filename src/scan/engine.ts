@@ -81,6 +81,8 @@ function emptyReport(projectId: string, sourceDeviceId: string, scannerDeviceId:
     sessions_discovered: 0,
     sessions_matched: 0,
     sessions_candidate_only: 0,
+    sessions_candidates_included: 0,
+    sessions_reused_unchanged: 0,
     events_extracted: 0,
     events_rejected: 0,
     git_commits: 0,
@@ -89,6 +91,7 @@ function emptyReport(projectId: string, sourceDeviceId: string, scannerDeviceId:
     malformed_records: 0,
     redacted_records: 0,
     symlinks_skipped: 0,
+    inaccessible_directories: 0,
     warnings: [],
     errors: [],
     candidates: [],
@@ -120,15 +123,17 @@ function pushEvent(
     size_bytes: 0,
     project_evidence: {},
   };
-  return normalizeRecord(
+  const event = normalizeRecord(
     {
       event_type: 'git.push.completed',
-      occurred_at: push.observed_at,
-      timestamp_precision: 'unknown',
+      // Reflog time when a real push was evidenced; otherwise absent so the
+      // event falls back to observed_at instead of claiming a fake timestamp.
+      occurred_at: push.occurred_at,
+      timestamp_precision: push.occurred_at ? 'second' : 'unknown',
       content: push.basis,
       commit_sha: push.commit_sha,
       branch: push.ref,
-      evidence_level: push.evidence_level === 'verified' ? 'verified' : 'inferred',
+      evidence_level: push.evidence_level,
       capture_level: push.evidence_level === 'verified' ? 'observed' : 'derived',
       source_record_id: push.push_id,
       sequence: 0,
@@ -144,9 +149,12 @@ function pushEvent(
       matchConfidence: 'exact',
       matchBasis: 'git_worktree',
       sourceType: 'git-repository',
-      captureMethod: 'git-remote-refs-read-only',
+      captureMethod: 'git-reflog-read-only',
     },
   );
+  // Evidence basis is provenance about the Git inspection, not an agent record.
+  event.evidence.basis = push.basis;
+  return event;
 }
 
 /**
@@ -293,6 +301,7 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
     : await loadScanState(stateDir, projectId);
   let priorEvents: ActivityEvent[] = [];
   let priorSessions: SessionRecord[] = [];
+  let priorTasks: TaskRecord[] = [];
   if (!options.forceRescan) {
     const outputInfo = await inspectPath(outputPath);
     if (outputInfo.exists && outputInfo.isDirectory && outputInfo.readable) {
@@ -301,6 +310,7 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
         if (prior.data.manifest.project_id === projectId) {
           priorEvents = prior.data.events;
           priorSessions = prior.data.sessions;
+          priorTasks = prior.data.tasks;
         }
       } catch {
         report.warnings.push('Existing output is not a readable Timeline Package; incremental reuse disabled');
@@ -332,8 +342,28 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
       continue;
     }
     report.sessions_discovered += sessions.length;
-    const sourceSymlinksSkipped = sessions.length > 0 ? Number(sessions[0]!.metadata?.skipped_symlinks ?? 0) : 0;
-    symlinksSkipped += sourceSymlinksSkipped;
+    const sourceMeta = source.metadata ?? {};
+    const sourceSkipped = Number(sourceMeta.skipped_symlinks ?? 0);
+    const sessionSkipped = sessions.reduce(
+      (max, s) => Math.max(max, Number(s.metadata?.skipped_symlinks ?? 0)),
+      0,
+    );
+    // The source-level counter and its per-session copies are the same value;
+    // taking the maximum avoids double counting while still covering sources
+    // that never annotate individual sessions.
+    symlinksSkipped += Math.max(sourceSkipped, sessionSkipped);
+    const inaccessible = Number(sourceMeta.inaccessible_directories ?? 0);
+    report.inaccessible_directories = (report.inaccessible_directories ?? 0) + inaccessible;
+    if (inaccessible > 0) {
+      report.warnings.push(
+        `${adapter.id}: ${inaccessible} director(y|ies) under ${source.display_path} could not be read; scan coverage is partial`,
+      );
+    }
+    if (sourceMeta.walk_truncated === true) {
+      report.warnings.push(
+        `${adapter.id}: directory walk reached its depth/file limit under ${source.display_path}; remaining sessions were not enumerated`,
+      );
+    }
     for (const session of sessions) {
       const sessionId = computeSessionId(sourceDeviceId, adapter.id, session.native_session_id);
       const identityPath = buildSourcePathIdentity(adapter.id, session.relative_path);
@@ -346,7 +376,15 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
           allEvents.push(...reused);
           const priorSession = priorSessions.find((s) => s.session_id === sessionId);
           if (priorSession) sessionRecords.push(priorSession);
+          // Reused sessions must keep their task record too; otherwise an
+          // incremental scan silently drops tasks that a full re-parse creates.
+          for (const task of priorTasks.filter((t) => t.session_id === sessionId)) {
+            taskRecords.push(task);
+          }
           report.sources_skipped_unchanged += 1;
+          report.sessions_reused_unchanged = (report.sessions_reused_unchanged ?? 0) + 1;
+          if (reused.some((e) => (e.provenance.confidence ?? 0) >= 0.8)) report.sessions_matched += 1;
+          else report.sessions_candidates_included = (report.sessions_candidates_included ?? 0) + 1;
           sourceEntries.push({
             source_id: shortId('src', key),
             agent_id: adapter.id,
@@ -427,6 +465,11 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
       }
 
       const observedAt = nowIso();
+      // Candidate sessions are only here because --include-candidates was
+      // explicit. They must not be reported as project matches.
+      if (match.confidence === 'candidate') {
+        report.sessions_candidates_included = (report.sessions_candidates_included ?? 0) + 1;
+      } else report.sessions_matched += 1;
       const sourceHash = hashObject({ agent: adapter.id, relative: session.relative_path, size: session.size_bytes, mtime: session.modified_at });
       let count = 0;
       for (const record of parsed.records) {
@@ -500,11 +543,13 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
       };
       usedAgentIds.add(adapter.id);
       report.sources_scanned += 1;
-      report.sessions_matched += 1;
     }
   }
   report.symlinks_skipped = symlinksSkipped;
-  progress(`Parsed ${report.sources_scanned} source file(s), ${report.sessions_matched} session(s) matched`);
+  progress(
+    `Parsed ${report.sources_scanned} source file(s), ${report.sessions_matched} session(s) matched, ` +
+      `${report.sessions_reused_unchanged} reused, ${report.sessions_candidates_included} candidate(s) explicitly included`,
+  );
 
   // ---- Read-only Git scan ----
   const git = await scanGit({ projectPath, projectId, deviceId: sourceDeviceId, maxCommits: options.maxCommits });

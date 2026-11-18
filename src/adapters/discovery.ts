@@ -107,13 +107,28 @@ export interface SessionScanSpec {
 export async function scanJsonlSessions(
   source: AgentSource,
   spec: SessionScanSpec,
-): Promise<{ sessions: SessionReference[]; skippedSymlinks: number; inaccessible: Array<{ path: string; reason: string }> }> {
-  if (!source.readable) return { sessions: [], skippedSymlinks: 0, inaccessible: [] };
+): Promise<{
+  sessions: SessionReference[];
+  skippedSymlinks: number;
+  inaccessible: Array<{ path: string; reason: string }>;
+  truncated: boolean;
+}> {
+  if (!source.readable) {
+    return { sessions: [], skippedSymlinks: 0, inaccessible: [], truncated: false };
+  }
   const walked = await walkFiles(source.root, {
     maxDepth: spec.maxDepth ?? 9,
     maxFiles: spec.maxFiles ?? 20_000,
     predicate: (relative, isDirectory) => (isDirectory ? true : spec.predicate(relative)),
   });
+  // Surface walk limits and unreadable subdirectories on the source object so
+  // the scan report can describe incomplete coverage instead of hiding it.
+  source.metadata = {
+    ...source.metadata,
+    skipped_symlinks: walked.skippedSymlinks,
+    inaccessible_directories: walked.inaccessible.length,
+    walk_truncated: walked.truncated,
+  };
   const sessions: SessionReference[] = [];
   for (const relative of walked.files) {
     const absolute = path.join(source.root, relative);
@@ -141,6 +156,7 @@ export async function scanJsonlSessions(
     sessions,
     skippedSymlinks: walked.skippedSymlinks,
     inaccessible: walked.inaccessible,
+    truncated: walked.truncated,
   };
 }
 

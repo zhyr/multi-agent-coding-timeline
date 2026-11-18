@@ -18,8 +18,9 @@ export function normalizePath(input: string): string {
   return out;
 }
 
-function isSameOrNested(a: string, b: string): boolean {
-  return a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep);
+/** True only for a proper descendant (equality is handled as an exact match). */
+function isStrictlyWithin(child: string, parent: string): boolean {
+  return child !== parent && child.startsWith(parent + path.sep);
 }
 
 function basename(input: string): string {
@@ -76,27 +77,31 @@ export function matchSessionToProject(
     };
   }
 
-  // --- Strong evidence: multiple independent signals ---
+  // --- Strong evidence: a precise path relationship ---
+  // A session cwd strictly inside the project worktree, or an agent path hint
+  // that equals the worktree, identifies the project. An ancestor cwd
+  // (e.g. the user's home directory) is NOT evidence that the session belongs
+  // to a project nested below it, so it is downgraded to candidate.
   const pathSignals: string[] = [];
-  if (cwd && worktrees.some((w) => isSameOrNested(cwd, w))) pathSignals.push('cwd is inside/above the project worktree');
+  if (cwd && worktrees.some((w) => isStrictlyWithin(cwd, w))) {
+    pathSignals.push('cwd is inside the project worktree');
+  }
   const exactHint = hintPaths.find((h) => worktrees.some((w) => h.normalized === w));
   if (exactHint) pathSignals.push(`agent project path hint matches worktree (${exactHint.raw})`);
-  const nativeIdMatch = !!evidence.nativeProjectId;
-  const branchMatch = !!evidence.metadata?.git_branch;
-  if (pathSignals.length >= 1 && (nativeIdMatch || exactHint || branchMatch || pathSignals.length >= 2)) {
+  if (pathSignals.length >= 1) {
     return {
       confidence: 'strong',
-      basis: 'multiple_corroborating_path_signals',
+      basis: 'path_signal_match',
       reasons: pathSignals,
       include: true,
     };
   }
-  if (pathSignals.length >= 2) {
-    return { confidence: 'strong', basis: 'multiple_path_signals', reasons: pathSignals, include: true };
-  }
 
   // --- Candidate: weak / single / name-only signals ---
   const name = identity.projectName.toLowerCase();
+  if (cwd && worktrees.some((w) => isStrictlyWithin(w, cwd))) {
+    reasons.push(`cwd ${cwd} is an ancestor of the project worktree`);
+  }
   if (cwd && worktrees.some((w) => basename(cwd) === basename(w))) {
     reasons.push('cwd basename equals project worktree basename');
   }

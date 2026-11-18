@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { open } from 'node:fs/promises';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import type { ParseIssue, SessionReference, TimestampPrecision } from './types.js';
@@ -16,14 +16,50 @@ export function nowIso(): string {
   return new Date().toISOString();
 }
 
-/** Read all text from a session file. `.zst` rollouts are decompressed in memory, never extracted to disk. */
+/**
+ * Read at most `limit` bytes without ever allocating a buffer for the whole
+ * file. Large agent archives must not be able to exhaust process memory.
+ */
+async function readBounded(filePath: string, limit: number): Promise<{ buffer: Buffer; truncated: boolean }> {
+  const handle = await open(filePath, 'r');
+  try {
+    const { size } = await handle.stat();
+    const length = Math.min(size, limit);
+    const buffer = Buffer.alloc(length);
+    let offset = 0;
+    while (offset < length) {
+      const { bytesRead } = await handle.read(buffer, offset, length - offset, offset);
+      if (bytesRead <= 0) break;
+      offset += bytesRead;
+    }
+    return { buffer: buffer.subarray(0, offset), truncated: size > limit };
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Read session text with an explicit byte bound; `.zst` rollouts are decompressed in memory, never extracted to disk. */
 export async function readSessionText(
   session: SessionReference,
 ): Promise<{ text: string; truncated: boolean; issues: ParseIssue[] }> {
   const issues: ParseIssue[] = [];
-  const raw = await readFile(session.path);
+  const isZst = session.path.endsWith('.zst');
+  const limit = isZst ? MAX_DECOMPRESSED_BYTES : MAX_SESSION_BYTES;
+  const { buffer: raw, truncated: inputTruncated } = await readBounded(session.path, limit);
+  if (isZst && inputTruncated) {
+    return {
+      text: '',
+      truncated: true,
+      issues: [
+        {
+          line: 0,
+          reason: `compressed session exceeds ${MAX_DECOMPRESSED_BYTES} byte read limit; a partial zstd frame cannot be safely decompressed`,
+        },
+      ],
+    };
+  }
   let buffer: Buffer = raw;
-  if (session.path.endsWith('.zst')) {
+  if (isZst) {
     try {
       const zlib = await import('node:zlib');
       const zstd = (zlib as unknown as { zstdDecompressSync?: (b: Buffer, o?: { maxOutputLength?: number }) => Buffer })
@@ -38,8 +74,8 @@ export async function readSessionText(
       };
     }
   }
-  const truncated = buffer.length > MAX_SESSION_BYTES;
-  const usable = truncated ? buffer.subarray(0, MAX_SESSION_BYTES) : buffer;
+  const truncated = inputTruncated || buffer.length > MAX_SESSION_BYTES;
+  const usable = buffer.length > MAX_SESSION_BYTES ? buffer.subarray(0, MAX_SESSION_BYTES) : buffer;
   if (truncated) issues.push({ line: 0, reason: 'session exceeds read limit; tail not processed' });
   return { text: usable.toString('utf8'), truncated, issues };
 }
@@ -108,6 +144,13 @@ export function toBlocks(content: unknown): TextBlock[] {
   return content.filter((b): b is TextBlock => !!b && typeof b === 'object');
 }
 
+/**
+ * Block types that carry plain text. OpenAI Codex rollouts use `input_text`
+ * for user/developer content and `output_text` for assistant content; other
+ * agents use `text`.
+ */
+const TEXT_BLOCK_TYPES = new Set(['text', 'input_text', 'output_text']);
+
 /** Join all textual blocks. Non-text blocks (tool_use/tool_result/thinking) are returned separately. */
 export function extractContent(content: unknown): { text: string; nonText: TextBlock[] } {
   const blocks = toBlocks(content);
@@ -115,8 +158,11 @@ export function extractContent(content: unknown): { text: string; nonText: TextB
   const nonText: TextBlock[] = [];
   for (const block of blocks) {
     const blockType = typeof block.type === 'string' ? block.type : '';
-    if ((blockType === 'text' || blockType === '') && typeof block.text === 'string') texts.push(block.text);
-    else nonText.push(block);
+    if ((TEXT_BLOCK_TYPES.has(blockType) || blockType === '') && typeof block.text === 'string') {
+      texts.push(block.text);
+    } else {
+      nonText.push(block);
+    }
   }
   return { text: texts.join('\n').trim(), nonText };
 }

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { writeFile } from 'node:fs/promises';
 import { runMerge } from '../src/merge/engine.js';
+import { deduplicateEvents } from '../src/merge/dedup.js';
 import { writePackage, validatePackage } from '../src/package/index.js';
 import { computeConflictEventId, computeEventId } from '../src/core/ids.js';
 import type { TimelineData } from '../src/package/model.js';
@@ -192,6 +193,78 @@ describe('Multi-device Timeline Merge', () => {
     const b = await createInput(root, 'B', { deviceId: 'device-b', events: [ev('b1')] });
     await writeFile(path.join(a, 'manifest.json'), '{"format":"broken"}\n');
     await expect(runMerge({ inputs: [a, b], output: path.join(root, 'merged') })).rejects.toThrow(/validation|checksum|parse/i);
+  });
+
+  it('embeds imported provenance and records content divergence instead of discarding it', () => {
+    const base = makeEvent();
+    const agent = {
+      agent_id: 'cursor',
+      agent_name: 'Cursor',
+      native_session_id: 'sess-1',
+      native_event_id: 'msg-1',
+    };
+    const native = ev('native-1', {
+      agent,
+      activity: { role: 'assistant', content: 'native text' },
+      content_hash: 'a'.repeat(64),
+      provenance: { ...base.provenance, capture_method: 'adapter:cursor', source_path: 'sessions/x.jsonl' },
+    });
+    const imported = ev('import-1', {
+      agent,
+      activity: { role: 'assistant', content: 'import text' },
+      content_hash: 'b'.repeat(64),
+      provenance: {
+        ...base.provenance,
+        capture_method: 'adapter:al-exporter',
+        capture_level: 'derived',
+        source_path: 'export/cursor/x.json',
+        raw_payload_ref: 'archive/messages/1.json',
+        source_record_id: 'import-1',
+        import_identity_source: 'message_id',
+      },
+    });
+    const result = deduplicateEvents([native, imported]);
+    expect(result.deterministic_pairs).toBe(1);
+    expect(result.events).toHaveLength(1);
+    const kept = result.events[0]!;
+    expect(kept.provenance.paired_import_sources?.[0]).toMatchObject({
+      source_path: 'export/cursor/x.json',
+      source_record_id: 'import-1',
+      raw_payload_ref: 'archive/messages/1.json',
+      capture_method: 'adapter:al-exporter',
+      content_diverged: true,
+    });
+    expect(kept.provenance.paired_import_event_id).toBeUndefined();
+    expect(kept.correlation?.note).toMatch(/divergence recorded/);
+  });
+
+  it('reconciles a device that is a scanner in one input and a source in another', async () => {
+    const root = await tempDir('aitimeline-merge-device-role-');
+    const aDir = path.join(root, 'A');
+    const bDir = path.join(root, 'B');
+    const a = buildInput({ deviceId: 'device-a', events: [ev('a1')] });
+    a.devices = [
+      { device_id: 'device-a', role: 'source' },
+      { device_id: 'device-b', role: 'scanner' },
+    ];
+    a.manifest = { ...a.manifest, timeline_id: 'tln_a' };
+    const b = buildInput({ deviceId: 'device-b', events: [ev('b1')] });
+    b.manifest = { ...b.manifest, timeline_id: 'tln_b' };
+    await writePackage(aDir, a);
+    await writePackage(bDir, b);
+
+    const result = await runMerge({ inputs: [aDir, bDir], output: path.join(root, 'merged') });
+    expect(result.data.manifest.source_devices).toEqual(['device-a', 'device-b']);
+    expect(result.report.source_devices).toBe(2);
+    expect(result.data.devices.find((d) => d.device_id === 'device-b')?.role).toBe('both');
+  });
+
+  it('rejects a single input because merging requires two or more packages', async () => {
+    const root = await tempDir('aitimeline-merge-single-');
+    const a = await createInput(root, 'A', { events: [ev('a1')] });
+    await expect(runMerge({ inputs: [a], output: path.join(root, 'merged') })).rejects.toThrow(
+      /at least two/i,
+    );
   });
 
   it('supports dry-run without writing any files', async () => {

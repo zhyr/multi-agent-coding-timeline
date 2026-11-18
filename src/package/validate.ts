@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { SUPPORTED_SCHEMA_VERSIONS } from '../core/constants.js';
+import { EVENT_TYPES, SUPPORTED_SCHEMA_VERSIONS } from '../core/constants.js';
 import { computeEventId, computeConflictEventId } from '../core/ids.js';
 import { firstIssue } from '../schema/common.js';
 import {
@@ -171,6 +171,14 @@ export function validateData(data: TimelineData): Pick<ValidationResult, 'ok' | 
       warnings.push(`Inferred event without correlation metadata: ${event.event_id}`);
       break;
     }
+  }
+  // The canonical list is a contract, not a hard rejection: older packages and
+  // third-party writers may carry types this release does not emit. Surface
+  // them instead of silently letting downstream consumers miss the events.
+  const knownTypes = new Set<string>(EVENT_TYPES);
+  const unknownTypes = [...new Set(data.events.map((e) => e.event_type).filter((t) => !knownTypes.has(t)))];
+  if (unknownTypes.length > 0) {
+    warnings.push(`Event types outside the canonical list: ${unknownTypes.join(', ')}`);
   }
   if (!data.project.identity_strong) {
     warnings.push('Project identity is name-derived (weak); cross-device merge requires explicit confirmation');

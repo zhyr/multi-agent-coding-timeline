@@ -49,11 +49,95 @@ describe('Read-only Git Scanner', () => {
   });
 
   it('classifies push evidence conservatively', () => {
-    expect(classifyPushEvidence({ reflogHasPushEntry: false, remoteTrackingRefCount: 0, hookLogConfirmsPush: false }).level).toBe('unknown');
-    expect(classifyPushEvidence({ reflogHasPushEntry: false, remoteTrackingRefCount: 1, hookLogConfirmsPush: false }).level).toBe('inferred');
-    expect(classifyPushEvidence({ reflogHasPushEntry: true, remoteTrackingRefCount: 0, hookLogConfirmsPush: false }).level).toBe('verified');
-    expect(classifyPushEvidence({ reflogHasPushEntry: false, remoteTrackingRefCount: 0, hookLogConfirmsPush: true }).level).toBe('verified');
-    expect(classifyPushEvidence({ reflogHasPushEntry: false, remoteTrackingRefCount: 0, hookLogConfirmsPush: false }).basis).toMatch(/commits alone/);
+    const base = {
+      remoteConfigured: true,
+      pushReflogRefs: [] as string[],
+      remoteTrackingRefCount: 0,
+      hookLogConfirmsPush: false,
+    };
+    expect(classifyPushEvidence(base).level).toBe('unknown');
+    expect(classifyPushEvidence({ ...base, remoteTrackingRefCount: 1 }).level).toBe('inferred');
+    expect(
+      classifyPushEvidence({ ...base, pushReflogRefs: ['refs/remotes/origin/main'] }).level,
+    ).toBe('verified');
+    expect(classifyPushEvidence({ ...base, hookLogConfirmsPush: true }).level).toBe('verified');
+    expect(classifyPushEvidence({ ...base, remoteConfigured: false }).basis).toMatch(/no configured remote/);
+    expect(
+      classifyPushEvidence({
+        ...base,
+        remoteConfigured: false,
+        pushReflogRefs: ['refs/remotes/origin/main'],
+      }).level,
+    ).toBe('unknown');
+  });
+
+  it('does not treat a commit message containing "push" as push evidence', async () => {
+    const root = await tempDir('aitimeline-git-pushword-');
+    const dir = path.join(root, 'repo');
+    await mkdir(dir, { recursive: true });
+    await exec('git', ['init', '-q', '-b', 'main', dir]);
+    await exec('git', ['-C', dir, 'remote', 'add', 'origin', 'https://github.com/example/fixture-project.git']);
+    await writeFile(path.join(dir, 'a.txt'), 'x\n');
+    await exec('git', ['-C', dir, 'add', 'a.txt']);
+    await exec('git', [
+      '-C', dir, '-c', 'user.name=Fixture Author', '-c', 'user.email=fixture@example.com',
+      'commit', '-q', '-m', 'push fix and deploy',
+    ]);
+    const sha = (await exec('git', ['-C', dir, 'rev-parse', 'HEAD'])).stdout.trim();
+    await exec('git', ['-C', dir, 'update-ref', 'refs/remotes/origin/main', sha]);
+
+    const result = await scanGit({ projectPath: dir, projectId: 'proj_x', deviceId: 'd' });
+    expect(result.pushes[0]!.evidence_level).not.toBe('verified');
+    expect(result.pushes[0]!.evidence_level).toBe('inferred');
+  });
+
+  it('verifies a real push and records the pushed ref and commit', async () => {
+    const root = await tempDir('aitimeline-git-realpush-');
+    const remote = path.join(root, 'remote.git');
+    const dir = path.join(root, 'repo');
+    await exec('git', ['init', '-q', '--bare', remote]);
+    await mkdir(dir, { recursive: true });
+    await exec('git', ['init', '-q', '-b', 'main', dir]);
+    await exec('git', ['-C', dir, 'remote', 'add', 'origin', remote]);
+    await writeFile(path.join(dir, 'a.txt'), 'x\n');
+    await exec('git', ['-C', dir, 'add', 'a.txt']);
+    await exec('git', [
+      '-C', dir, '-c', 'user.name=Fixture Author', '-c', 'user.email=fixture@example.com',
+      'commit', '-q', '-m', 'initial commit',
+    ]);
+    const sha = (await exec('git', ['-C', dir, 'rev-parse', 'HEAD'])).stdout.trim();
+    await exec('git', ['-C', dir, 'push', '-q', '-u', 'origin', 'main']);
+    await writeFile(path.join(dir, 'b.txt'), 'y\n');
+    await exec('git', ['-C', dir, 'add', 'b.txt']);
+    await exec('git', [
+      '-C', dir, '-c', 'user.name=Fixture Author', '-c', 'user.email=fixture@example.com',
+      'commit', '-q', '-m', 'second commit',
+    ]);
+    const sha2 = (await exec('git', ['-C', dir, 'rev-parse', 'HEAD'])).stdout.trim();
+    await exec('git', ['-C', dir, 'push', '-q', 'origin', 'main']);
+
+    const result = await scanGit({ projectPath: dir, projectId: 'proj_x', deviceId: 'd' });
+    expect(result.pushes).toHaveLength(2);
+    expect(result.pushes.every((p) => p.evidence_level === 'verified')).toBe(true);
+    expect(result.pushes.every((p) => p.ref === 'refs/remotes/origin/main')).toBe(true);
+    expect(new Set(result.pushes.map((p) => p.commit_sha))).toEqual(new Set([sha, sha2]));
+    for (const push of result.pushes) {
+      expect(push.occurred_at).toBeTruthy();
+      expect(Number.isNaN(Date.parse(push.occurred_at!))).toBe(false);
+      expect(push.occurred_at).not.toBe(push.observed_at);
+      expect(push.basis).toMatch(/update by push/);
+    }
+  });
+
+  it('never yields a verified push when no remote is configured', async () => {
+    const root = await tempDir('aitimeline-git-noremote-push-');
+    const dir = path.join(root, 'repo');
+    await createGitRepo(dir, { commits: 1 });
+    const sha = (await exec('git', ['-C', dir, 'rev-parse', 'HEAD'])).stdout.trim();
+    await exec('git', ['-C', dir, 'update-ref', 'refs/remotes/origin/main', sha]);
+
+    const result = await scanGit({ projectPath: dir, projectId: 'proj_x', deviceId: 'd' });
+    expect(result.pushes[0]!.evidence_level).toBe('unknown');
   });
 
   it('does not claim a verified push merely because a remote tracking ref exists', async () => {

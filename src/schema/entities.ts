@@ -78,11 +78,34 @@ export const ActivityEventSchema = obj({
     source_hash: z.string().optional(),
     confidence: Confidence.optional(),
     /**
-     * Set when an Al-exporter import was folded into this event by inferred
-     * pairing (same agent, session id, type, time and content). The referenced
-     * event is not shipped; the pairing is not a confirmed identical record.
+     * Legacy pointer kept for packages written by earlier releases. New
+     * packages use `paired_import_sources` below, which embeds the provenance
+     * of the folded record instead of pointing at an event that is not shipped.
      */
     paired_import_event_id: z.string().optional(),
+    /**
+     * Al-exporter imports folded into this event. The imported events are not
+     * shipped, so their source references must be carried here. A differing
+     * `content_hash` is recorded as `content_diverged` rather than silently
+     * discarding the parse difference.
+     */
+    paired_import_sources: z
+      .array(
+        obj({
+          event_id: NonEmpty,
+          dedup_key: z.string().optional(),
+          capture_method: z.string().optional(),
+          source_path: z.string().optional(),
+          source_path_identity: z.string().optional(),
+          source_record_id: z.string().optional(),
+          source_line: z.number().int().positive().optional(),
+          raw_payload_ref: z.string().optional(),
+          source_hash: z.string().optional(),
+          content_hash: z.string().optional(),
+          content_diverged: z.boolean().optional(),
+        }),
+      )
+      .optional(),
     /**
      * Import adapters only: which source field produced agent.native_event_id.
      * `message_id` enables deterministic dedup; `session_line` can also be
@@ -244,6 +267,8 @@ export const GitPushRecordSchema = obj({
   commit_sha: ShaHex.optional(),
   evidence_level: z.enum(['verified', 'inferred', 'unknown']),
   basis: NonEmpty,
+  /** Reflog timestamp when a real push entry exists; absent for inferred/unknown pushes. */
+  occurred_at: z.string().optional(),
   observed_at: z.string().optional(),
 });
 export type GitPushRecord = z.infer<typeof GitPushRecordSchema>;
@@ -294,7 +319,13 @@ export const ScanReportSchema = obj({
   sources_skipped_unchanged: z.number().int().nonnegative(),
   sessions_discovered: z.number().int().nonnegative(),
   sessions_matched: z.number().int().nonnegative(),
+  /** Exact/strong matches only; candidate sessions are never counted here. */
   sessions_candidate_only: z.number().int().nonnegative(),
+  /** Optional additive counters: packages written by earlier releases stay valid. */
+  sessions_candidates_included: z.number().int().nonnegative().optional(),
+  /** Sessions whose records were reused from an unchanged prior scan. */
+  sessions_reused_unchanged: z.number().int().nonnegative().optional(),
+  /** Number of raw adapter records normalized before deduplication. */
   events_extracted: z.number().int().nonnegative(),
   events_rejected: z.number().int().nonnegative(),
   git_commits: z.number().int().nonnegative(),
@@ -303,6 +334,8 @@ export const ScanReportSchema = obj({
   malformed_records: z.number().int().nonnegative(),
   redacted_records: z.number().int().nonnegative(),
   symlinks_skipped: z.number().int().nonnegative(),
+  /** Subdirectories that could not be read during discovery (permission/IO). */
+  inaccessible_directories: z.number().int().nonnegative().optional(),
   warnings: z.array(z.string()),
   errors: z.array(z.string()),
   candidates: z.array(

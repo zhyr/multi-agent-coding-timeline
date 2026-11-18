@@ -143,19 +143,24 @@ any content change. See [docs/timeline-schema.md](docs/timeline-schema.md).
 Every event carries `evidence.level` — `verified`, `agent_reported`, `inferred` or
 `unknown` — plus `provenance` and the parser version.
 
-- Git commits and pushes backed by real refs are `verified`.
+- Git commits are `verified`. A push is `verified` only when a `update by push` reflog entry
+  exists on a remote-tracking ref with a configured remote; a remote-tracking ref alone is
+  `inferred`. Commit messages never count as push evidence.
 - "Task complete" messages from an agent are `agent_reported`, never upgraded.
 - WorkBuddy session starts, Trae memory summaries and Cursor transcript ordering are
   explicitly `inferred`/`agent_reported`, with notes.
-- Candidate project matches are excluded by default and labelled when included.
+- Candidate project matches are excluded by default and labelled when included. An ancestor
+  `cwd` is a candidate, not a strong project match.
 - Conflicting versions of the same source record are never discarded; both are kept and
-  recorded in `reports/conflicts.jsonl`.
+  recorded in `reports/conflicts.jsonl`. When an Al-exporter import is folded into a native
+  event, its source references are embedded in `provenance.paired_import_sources` and a
+  content difference is explicitly flagged as `content_diverged` instead of being hidden.
 
-## Adapter status (verified 2026-11-17 on this machine)
+## Adapter status (verified 2026-11-18 on this machine)
 
 | Adapter | Verification | Sessions seen | Notes |
 | --- | --- | --- | --- |
-| `codex` | verified | 214 | JSONL + zstd, `session_meta.payload.cwd`, tool calls partial |
+| `codex` | verified | 214 | JSONL + zstd, `input_text`/`output_text` bodies, `environment_context` filtered; `cwd` is a path hint so project identity is `partial`; tool calls partial |
 | `cursor` | partially verified | 2,528 | transcripts have no timestamps; SQLite metadata read-only |
 | `qoder` | verified | 4 | cwd/gitBranch/timestamps/tool blocks |
 | `trae` | partially verified | 1 | memory summaries only; all events agent-reported |
@@ -226,6 +231,11 @@ performed separately, read-only, and is documented with counts in
   value wins.
 - The 3-way "A+B+C" merge is the same operation as 2-way merge: it is deterministic and
   idempotent, but Git push evidence remains per-device and is never synthesized.
+- Deduplication is scoped by `dedup_key`, which includes the source device. If the same
+  session is scanned on two devices, both device-level observations are retained rather than
+  collapsed into one device-agnostic event. This preserves provenance; it is not a claim that
+  all logically identical cross-device activities were merged. See
+  [docs/timeline-merging.md](docs/timeline-merging.md).
 - Only manual runs are supported. Incremental state stores fingerprints only; unchanged
   session files are reused from the previous package, and any change forces a full re-parse.
 - Content mode `full` may include prompts and code. `metadata_only` is recommended for
@@ -372,19 +382,22 @@ integrity/checksums.sha256
 每个事件都带有 `evidence.level`（`verified`、`agent_reported`、`inferred` 或 `unknown`），
 并保留 `provenance` 与解析器版本。
 
-- 有真实 ref 支撑的 Git 提交与推送标记为 `verified`。
+- 有真实 Git 提交记录支撑的是 `verified`；推送只有在配置了 remote 且 reflog 存在
+  `update by push` 记录时才是 `verified`，仅有远端跟踪引用只能是 `inferred`。commit message
+  不会被当作推送证据。
 - Agent 自称的“任务完成”一律标记为 `agent_reported`，不会被提升等级。
 - WorkBuddy 的会话开始时间、Trae 的记忆摘要、Cursor 转录顺序，明确标注为
   `inferred`/`agent_reported`，并附说明。
-- 仅达到候选级别的项目匹配默认排除；被纳入时会明确标注。
+- 仅达到候选级别的项目匹配默认排除；被纳入时会明确标注。祖先目录形式的 `cwd` 只算候选。
 - 同一条源记录出现冲突版本时不会丢弃任何一方，两者都会保留并写入
-  `reports/conflicts.jsonl`。
+  `reports/conflicts.jsonl`。导入记录被折叠进原生事件时，其来源引用会嵌入
+  `provenance.paired_import_sources`；内容差异用 `content_diverged` 显式标注。
 
-## 适配器状态（2026-11-17 在本机实测）
+## 适配器状态（2026-11-18 在本机实测）
 
 | 适配器 | 验证状态 | 实测会话数 | 说明 |
 | --- | --- | --- | --- |
-| `codex` | verified | 214 | JSONL + zstd，使用 `session_meta.payload.cwd`，工具调用为部分支持 |
+| `codex` | verified | 214 | JSONL + zstd，解析 `input_text`/`output_text` 正文并过滤 `<environment_context>`；`cwd` 只是路径线索，项目识别为部分支持；工具调用部分支持 |
 | `cursor` | partially verified | 2,528 | 转录记录无时间戳；SQLite 元数据只读 |
 | `qoder` | verified | 4 | 提供 cwd/gitBranch/时间戳/工具块 |
 | `trae` | partially verified | 1 | 仅有记忆摘要；全部事件为 agent-reported |

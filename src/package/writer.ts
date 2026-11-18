@@ -1,5 +1,6 @@
-import { mkdir, readdir, writeFile, lstat } from 'node:fs/promises';
+import { mkdir, readdir, writeFile, lstat, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { homedir } from 'node:os';
 import { IoError } from '../core/errors.js';
 import { writeJsonl } from '../core/jsonl.js';
 import type { TimelineData } from './model.js';
@@ -14,26 +15,56 @@ async function writeJson(target: string, value: unknown): Promise<void> {
   await writeFile(target, JSON.stringify(value, null, 2) + '\n', 'utf8');
 }
 
+/**
+ * A Timeline Package directory is entirely tool-generated. Replacing one with
+ * --force must therefore:
+ *   - reject symlinks anywhere at the top level (writing through `git/` or
+ *     `reports/` would escape the package),
+ *   - remove stale files from the previous operation (e.g. a scan report left
+ *     behind when the same directory is reused for a merge),
+ *   - refuse to delete a directory that does not look like an existing package.
+ */
 async function ensureSafeOutput(root: string, overwrite: boolean): Promise<void> {
+  const absolute = path.resolve(root);
+  const protectedPaths = new Set([path.parse(absolute).root, homedir(), process.cwd()]);
+  if (protectedPaths.has(absolute)) {
+    throw new IoError(`Refusing to replace a protected path: ${absolute}`);
+  }
   let stats;
   try {
-    stats = await lstat(root);
+    stats = await lstat(absolute);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw new IoError(`Cannot inspect output path ${root}: ${(error as Error).message}`);
+    throw new IoError(`Cannot inspect output path ${absolute}: ${(error as Error).message}`);
   }
   if (stats.isSymbolicLink()) {
-    throw new IoError(`Output path is a symlink and will not be written: ${root}`);
+    throw new IoError(`Output path is a symlink and will not be written: ${absolute}`);
   }
   if (!stats.isDirectory()) {
-    throw new IoError(`Output path exists and is not a directory: ${root}`);
+    throw new IoError(`Output path exists and is not a directory: ${absolute}`);
   }
-  const existing = await readdir(root);
-  if (existing.length > 0 && !overwrite) {
+  for (const entry of await readdir(absolute, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) {
+      throw new IoError(
+        `Output directory contains a symlink (${entry.name}); refusing to write through it: ${absolute}`,
+      );
+    }
+  }
+  const existing = await readdir(absolute);
+  if (existing.length === 0) return;
+  if (!overwrite) {
     throw new IoError(
-      `Output directory is not empty: ${root}. Use --force to replace it, or choose a new path.`,
+      `Output directory is not empty: ${absolute}. Use --force to replace it, or choose a new path.`,
     );
   }
+  if (!existing.includes('manifest.json')) {
+    throw new IoError(
+      `Refusing to replace a non-empty directory that is not an existing Timeline Package: ${absolute}`,
+    );
+  }
+  // Replace the whole package so no file from the previous operation survives.
+  await rm(absolute, { recursive: true, force: true });
+  await mkdir(absolute, { recursive: true });
 }
 
 /**

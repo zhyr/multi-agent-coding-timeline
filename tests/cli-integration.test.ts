@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile, chmod } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -55,6 +55,32 @@ describe('CLI integration: scan + merge + exit codes', () => {
       '--quiet',
     ]);
   }
+
+  it('keeps scan failure exit codes identical in text and --json mode', async () => {
+    const sourceRoot = path.join(root, 'blocked-source');
+    const session = path.join(sourceRoot, '.codex', 'sessions', 'rollout-unreadable.jsonl');
+    await writeCodexSession(session, { cwd: project, sessionId: 'unreadable' });
+    await chmod(session, 0o000);
+    const common = [
+      'node', 'aitimeline', 'scan',
+      '--project', project,
+      '--source-root', sourceRoot,
+      '--source-device', 'device-blocked',
+      '--agents', 'codex',
+      '--quiet',
+    ];
+    try {
+      const textCode = await run([...common, '--output', path.join(root, 'out-text')]);
+      stdout.mockClear();
+      const jsonCode = await run([...common, '--output', path.join(root, 'out-json'), '--json']);
+      expect(textCode).toBe(5);
+      expect(jsonCode).toBe(5);
+      const payload = JSON.parse(stdout.mock.calls.map((c) => String(c[0])).join('')) as { ok: boolean };
+      expect(payload.ok).toBe(false);
+    } finally {
+      await chmod(session, 0o644);
+    }
+  });
 
   it('scans two devices, merges them, and re-merges the result idempotently', async () => {
     const a = path.join(root, 'a.ai-timeline');
@@ -187,9 +213,14 @@ describe('CLI integration: scan + merge + exit codes', () => {
     expect(data.manifest.project_identity_strong).toBe(false);
 
     const merged = path.join(root, 'weak-merged.ai-timeline');
-    expect(await run(['node', 'aitimeline', 'merge', output, '--output', merged, '--quiet'])).toBe(6);
+    // Two inputs are required now; the same weak package twice still exercises
+    // the identity gate without inventing a second device timeline.
+    expect(await run(['node', 'aitimeline', 'merge', output, output, '--output', merged, '--quiet'])).toBe(6);
     expect(
-      await run(['node', 'aitimeline', 'merge', output, '--output', merged, '--allow-weak-identity', '--quiet']),
+      await run([
+        'node', 'aitimeline', 'merge', output, output,
+        '--output', merged, '--allow-weak-identity', '--quiet',
+      ]),
     ).toBe(0);
     expect((await readPackage(merged)).data.manifest.project_identity_basis).toBe('name');
   });
@@ -215,6 +246,31 @@ describe('CLI integration: scan + merge + exit codes', () => {
     const second = (await readPackage(output)).data;
     expect(second.scanReport?.sources_skipped_unchanged).toBe(1);
     expect(second.events.map((e) => e.event_id).sort()).toEqual(first.events.map((e) => e.event_id).sort());
+  });
+
+  it('keeps task records when unchanged sources are reused', async () => {
+    const output = path.join(root, 'incremental-tasks.ai-timeline');
+    expect(await scan('device-task', 'session-task', output)).toBe(0);
+    const first = (await readPackage(output)).data;
+    expect(first.tasks).toHaveLength(1);
+
+    const secondCode = await run([
+      'node', 'aitimeline', 'scan',
+      '--project', project,
+      '--source-root', path.join(root, 'device-task'),
+      '--source-device', 'device-task',
+      '--output', output,
+      '--state-dir', path.join(root, 'state-device-task'),
+      '--agents', 'codex',
+      '--content-mode', 'metadata_only',
+      '--force',
+      '--quiet',
+    ]);
+    expect(secondCode).toBe(0);
+    const second = (await readPackage(output)).data;
+    expect(second.scanReport?.sources_skipped_unchanged).toBe(1);
+    expect(second.tasks).toHaveLength(1);
+    expect(second.tasks[0]!.task_id).toBe(first.tasks[0]!.task_id);
   });
 
   it('re-parses a source file after it changes', async () => {

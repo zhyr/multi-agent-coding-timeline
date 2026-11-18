@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, open } from 'node:fs/promises';
 import path from 'node:path';
 import { zstdCompressSync } from 'node:zlib';
 import { CodexAdapter } from '../src/adapters/codex.js';
@@ -11,6 +11,7 @@ import { TraeAdapter } from '../src/adapters/trae.js';
 import { CodeBuddyAdapter, ZCodeAdapter } from '../src/adapters/limited-adapters.js';
 import { OpenCodeAdapter } from '../src/adapters/opencode.js';
 import { summarizeAdapters } from '../src/adapters/registry.js';
+import { readSessionText, MAX_SESSION_BYTES } from '../src/adapters/util.js';
 import type { AgentSource, SessionReference } from '../src/adapters/types.js';
 import {
   tempDir,
@@ -102,6 +103,128 @@ describe('Codex adapter (real local format, synthetic fixtures)', () => {
     const result = await new CodexAdapter().parseSession(sessionFor(relative));
     expect(result.records.length).toBe(2);
     expect(result.project_evidence?.cwd).toBe(CWD);
+  });
+
+  it('extracts real rollout input_text/output_text content blocks', async () => {
+    const relative = 'sessions/2026/01/01/rollout-realblocks.jsonl';
+    await writeJsonl(path.join(root, relative), [
+      { ordinal: 0, timestamp: '2026-11-17T01:10:00.000Z', type: 'session_meta', payload: { id: 'cx-rb', cwd: CWD } },
+      {
+        ordinal: 1,
+        timestamp: '2026-11-17T01:10:01.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'developer',
+          content: [{ type: 'input_text', text: '<permissions instructions>sandbox</permissions instructions>' }],
+        },
+      },
+      {
+        ordinal: 2,
+        timestamp: '2026-11-17T01:10:02.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: '<environment_context>\n  <cwd>/tmp/fixture-project</cwd>\n</environment_context>' },
+            { type: 'input_text', text: 'Please implement feature B' },
+            { type: 'input_image', image_url: 'data:image/png;base64,AAAA' },
+          ],
+        },
+      },
+      {
+        ordinal: 3,
+        timestamp: '2026-11-17T01:10:05.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Implemented feature B' }] },
+      },
+    ]);
+    const result = await new CodexAdapter().parseSession(sessionFor(relative));
+
+    const request = result.records.find((r) => r.event_type === 'agent.user_request.submitted');
+    const response = result.records.find((r) => r.event_type === 'agent.response.received');
+    expect(request?.content).toBe('Please implement feature B');
+    expect(response?.content).toBe('Implemented feature B');
+    expect(result.records.some((r) => r.event_type === 'agent.tool.started')).toBe(false);
+  });
+
+  it('does not treat environment_context-only content as a user request', async () => {
+    const relative = 'sessions/2026/01/01/rollout-envonly.jsonl';
+    await writeJsonl(path.join(root, relative), [
+      { ordinal: 0, timestamp: '2026-11-17T01:20:00.000Z', type: 'session_meta', payload: { id: 'cx-env', cwd: CWD } },
+      {
+        ordinal: 1,
+        timestamp: '2026-11-17T01:20:01.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: '<environment_context>\n  <cwd>/tmp/fixture-project</cwd>\n</environment_context>' }],
+        },
+      },
+    ]);
+    const result = await new CodexAdapter().parseSession(sessionFor(relative));
+    expect(result.records.some((r) => r.event_type === 'agent.user_request.submitted')).toBe(false);
+  });
+
+  it('strips IDE context and AGENTS.md instructions but keeps the real Codex request', async () => {
+    const relative = 'sessions/2026/01/01/rollout-harness.jsonl';
+    const ideContext =
+      '# Context from my IDE setup:\n\n## Active file: src/app.ts\n## Open tabs:\n- app.ts: src/app.ts\n\n' +
+      '## My request for Codex:\n请修复权限矩阵的列滚动问题';
+    const agentsInstructions =
+      '# AGENTS.md instructions for /tmp/fixture-project\n\n<INSTRUCTIONS>\n# Repository Guidelines\n- run tests\n</INSTRUCTIONS>';
+    await writeJsonl(path.join(root, relative), [
+      { ordinal: 0, timestamp: '2026-11-17T01:30:00.000Z', type: 'session_meta', payload: { id: 'cx-harness', cwd: CWD } },
+      {
+        ordinal: 1,
+        timestamp: '2026-11-17T01:30:01.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: ideContext }] },
+      },
+      {
+        ordinal: 2,
+        timestamp: '2026-11-17T01:30:02.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: agentsInstructions }] },
+      },
+      {
+        ordinal: 3,
+        timestamp: '2026-11-17T01:30:03.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '已修复' }] },
+      },
+    ]);
+    const result = await new CodexAdapter().parseSession(sessionFor(relative));
+
+    const requests = result.records.filter((r) => r.event_type === 'agent.user_request.submitted');
+    expect(requests).toHaveLength(1);
+    expect(requests[0].content).toBe('请修复权限矩阵的列滚动问题');
+    expect(requests[0].content).not.toContain('Context from my IDE setup');
+    expect(requests[0].content).not.toContain('AGENTS.md instructions');
+    expect(requests[0].content).not.toContain('Repository Guidelines');
+    const response = result.records.find((r) => r.event_type === 'agent.response.received');
+    expect(response?.content).toBe('已修复');
+  });
+
+  it('does not emit a user request for an IDE-context block with no real request', async () => {
+    const relative = 'sessions/2026/01/01/rollout-ideonly.jsonl';
+    await writeJsonl(path.join(root, relative), [
+      { ordinal: 0, timestamp: '2026-11-17T01:40:00.000Z', type: 'session_meta', payload: { id: 'cx-ideonly', cwd: CWD } },
+      {
+        ordinal: 1,
+        timestamp: '2026-11-17T01:40:01.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: '# Context from my IDE setup:\n\n## Active file: src/app.ts\n## Open tabs:\n- app.ts' }],
+        },
+      },
+    ]);
+    const result = await new CodexAdapter().parseSession(sessionFor(relative));
+    expect(result.records.some((r) => r.event_type === 'agent.user_request.submitted')).toBe(false);
   });
 
   it('keeps duplicate native ids visible and ignores unsupported record types', async () => {
@@ -238,5 +361,27 @@ describe('Discovery-only adapters and honest capability declarations', () => {
     const codex = all.find((a) => a.id === 'codex')!;
     expect(codex.capabilities.ai_request).toBe('unavailable');
     expect(codex.notes.some((n) => n.includes('agent_reported'))).toBe(true);
+  });
+});
+
+describe('Bounded session reads', () => {
+  it('truncates a session larger than the read limit without allocating the whole file', async () => {
+    const relative = 'sessions/2026/01/01/rollout-large.jsonl';
+    const line =
+      '{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"' +
+      'x'.repeat(512) +
+      '"}]}}\n';
+    const chunk = line.repeat(2000);
+    const handle = await open(path.join(root, relative), 'w');
+    let written = 0;
+    while (written < MAX_SESSION_BYTES + 8192) {
+      await handle.write(chunk);
+      written += Buffer.byteLength(chunk);
+    }
+    await handle.close();
+    const result = await readSessionText(sessionFor(relative));
+    expect(result.truncated).toBe(true);
+    expect(Buffer.byteLength(result.text)).toBeLessThanOrEqual(MAX_SESSION_BYTES);
+    expect(result.issues.some((i) => /read limit/.test(i.reason))).toBe(true);
   });
 });

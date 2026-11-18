@@ -7,7 +7,7 @@ import { verifyProjectCompatibility } from '../project/resolver.js';
 import { deduplicateEvents, mergeById, sortEvents } from './dedup.js';
 import { readPackage, validatePackage, writePackage, validateData, emptyTimeline } from '../package/index.js';
 import type { TimelineData } from '../package/model.js';
-import type { EventRelation, Manifest, MergeReport } from '../schema/entities.js';
+import type { EventRelation, Manifest, MergeReport, TimelineDevice } from '../schema/entities.js';
 
 export interface MergeOptions {
   inputs: string[];
@@ -31,11 +31,47 @@ function pickContentMode(modes: ContentMode[]): ContentMode {
   return 'metadata_only';
 }
 
+/**
+ * Device identities are reconciled, not deduplicated. The same device id can be
+ * the source in one input and the scanner in another; taking the first record
+ * would drop its source role and remove it from `manifest.source_devices`.
+ */
+function mergeDevices(collections: readonly (readonly TimelineDevice[])[]): TimelineDevice[] {
+  const grouped = new Map<string, { record: TimelineDevice; roles: Set<string> }>();
+  for (const collection of collections) {
+    for (const record of collection) {
+      const existing = grouped.get(record.device_id);
+      if (!existing) {
+        grouped.set(record.device_id, {
+          record: { ...record },
+          roles: new Set(record.role ? [record.role] : []),
+        });
+        continue;
+      }
+      if (record.role) existing.roles.add(record.role);
+      const target = existing.record as Record<string, unknown>;
+      for (const [key, value] of Object.entries(record)) {
+        if (key === 'role' || key === 'device_id') continue;
+        if (value !== undefined && target[key] === undefined) target[key] = value;
+      }
+    }
+  }
+  return [...grouped.values()]
+    .map(({ record, roles }) => {
+      let role: TimelineDevice['role'];
+      if (roles.has('both') || (roles.has('source') && roles.has('scanner'))) role = 'both';
+      else if (roles.has('source')) role = 'source';
+      else if (roles.has('scanner')) role = 'scanner';
+      return { ...record, ...(role ? { role } : {}) };
+    })
+    .sort((a, b) => a.device_id.localeCompare(b.device_id));
+}
+
 /** Mode C: A+B, extensible to A+B+C+N. Deterministic and idempotent. */
 export async function runMerge(options: MergeOptions): Promise<MergeOutcome> {
   const progress = options.onProgress ?? (() => undefined);
-  if (!options.inputs || options.inputs.length < 1) {
-    throw new UsageError('merge requires at least one input Timeline Package');
+  if (!options.inputs || options.inputs.length < 2) {
+    throw new UsageError('merge requires at least two input Timeline Packages');
   }
   const inputPaths = options.inputs.map((p) => path.resolve(expandHome(p)));
   const outputPath = path.resolve(expandHome(options.output));
@@ -126,7 +162,7 @@ export async function runMerge(options: MergeOptions): Promise<MergeOutcome> {
 
   const data = emptyTimeline();
   data.project = project;
-  data.devices = mergeById(packages.map((p) => p.devices), (d) => d.device_id);
+  data.devices = mergeDevices(packages.map((p) => p.devices));
   data.agents = mergeById(packages.map((p) => p.agents), (a) => a.agent_id);
   data.sessions = mergeById(packages.map((p) => p.sessions), (s) => s.session_id);
   data.tasks = mergeById(packages.map((p) => p.tasks), (t) => t.task_id);
