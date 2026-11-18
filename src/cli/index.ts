@@ -8,6 +8,7 @@ import { runScan } from '../scan/engine.js';
 import { runMerge } from '../merge/engine.js';
 import { readPackage, validatePackage } from '../package/index.js';
 import { renderTimelineHtml } from '../viewer/build.js';
+import { startServer } from '../web/server.js';
 import {
   parseAgents,
   parseContentMode,
@@ -297,6 +298,35 @@ export function createProgram(): { program: Command; getExitCode: () => number }
             `  contents: ${data.events.length} events, ${data.sessions.length} sessions, ${data.commits.length} commits\n`,
         );
       }
+    });
+
+  program
+    .command('serve')
+    .description('Start the interactive local web app (scan button, project list, timeline clusters)')
+    .option('--host <host>', 'bind host', '127.0.0.1')
+    .option('--port <port>', 'bind port', '8766')
+    .option('--data-dir <path>', 'local data directory for catalog/packages/state')
+    .action(async (opts) => {
+      const port = Number(opts.port);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new UsageError(`invalid port: ${opts.port}`);
+      }
+      const running = await startServer({
+        host: opts.host,
+        port,
+        dataDir: opts.dataDir ? path.resolve(opts.dataDir) : undefined,
+      });
+      process.stdout.write(
+        `AI Coding Timeline web app running\n` +
+          `  URL:       http://${opts.host}:${port}/\n` +
+          `  data dir:  ${opts.dataDir ? path.resolve(opts.dataDir) : '(default ~/.aitimeline-web)'}\n` +
+          `  Press Ctrl+C to stop.\n`,
+      );
+      const shutdown = () => {
+        void running.close().then(() => process.exit(0));
+      };
+      process.on('SIGINT', shutdown);
+      process.on('SIGTERM', shutdown);
     });
 
   program

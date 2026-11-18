@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Coding Timeline · 本地扫描</title>
+<style>
+  :root{
+    --bg:#f7f8fc; --panel:#fff; --panel-2:#f2f3f9; --border:#e3e5ef;
+    --text:#1f2333; --muted:#6b7189; --primary:#4f46e5; --primary-2:#4338ca;
+    --verified:#0f9d58; --agent:#7c3aed; --inferred:#d97706; --unknown:#64748b;
+    --shadow:0 1px 3px rgba(24,28,60,.06),0 6px 20px rgba(24,28,60,.04);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:var(--text);background:var(--bg)}
+  .app{display:grid;grid-template-columns:340px 1fr;min-height:100vh}
+  aside{background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;height:100vh;position:sticky;top:0}
+  .brand{padding:18px 20px 12px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
+  .logo{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;display:grid;place-items:center;font-weight:700}
+  .brand h1{font-size:15px;margin:0}
+  .brand .sub{font-size:11px;color:var(--muted)}
+  .controls{padding:14px 16px;border-bottom:1px solid var(--border)}
+  .controls label{display:block;font-size:11px;color:var(--muted);margin:0 0 5px;font-weight:600;letter-spacing:.02em}
+  .controls input,.controls select{width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#fff;margin-bottom:10px}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:0;border-radius:8px;padding:9px 12px;font-size:13px;font-weight:600;cursor:pointer;color:#fff;background:var(--primary)}
+  .btn:hover{background:var(--primary-2)}
+  .btn:disabled{opacity:.6;cursor:not-allowed}
+  .btn.ghost{background:#fff;color:var(--text);border:1px solid var(--border)}
+  .btn.sm{padding:6px 10px;font-size:12px}
+  .progress-wrap{margin-top:8px;display:none}
+  .progress-bar{height:6px;background:var(--panel-2);border-radius:4px;overflow:hidden}
+  .progress-bar>i{display:block;height:100%;width:0;background:var(--primary);transition:width .2s}
+  .progress-msg{font-size:11px;color:var(--muted);margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .list-head{padding:12px 16px 6px;display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--muted)}
+  .repo-list{overflow:auto;padding:0 10px 16px;flex:1}
+  .repo{display:block;width:100%;text-align:left;border:1px solid transparent;background:transparent;border-radius:10px;padding:11px 12px;margin-bottom:5px;cursor:pointer}
+  .repo:hover{background:var(--panel-2)}
+  .repo.active{border-color:#c7c9f5;background:#f0efff}
+  .repo .name{font-weight:600;font-size:13px;display:flex;align-items:center;gap:6px}
+  .repo .path{font-size:11px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .repo .meta{font-size:11px;color:var(--muted);margin-top:5px;display:flex;gap:10px}
+  .dot{width:7px;height:7px;border-radius:50%;display:inline-block;background:#cbd0e0}
+  .dot.scanned{background:var(--verified)}
+  .tag{font-size:10px;padding:1px 6px;border-radius:5px;background:#eceefe;color:var(--primary);font-weight:600}
+  main{height:100vh;overflow:auto;padding:22px 26px}
+  .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;gap:12px;flex-wrap:wrap}
+  .topbar h2{margin:0;font-size:20px}
+  .topbar .crumb{font-size:12px;color:var(--muted);margin-top:3px}
+  .empty{display:grid;place-items:center;text-align:center;color:var(--muted);height:60vh;gap:12px}
+  .empty .em{font-size:40px;opacity:.5}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-bottom:18px}
+  .kpi{background:var(--panel);border:1px solid var(--border);border-radius:11px;padding:14px 16px;box-shadow:var(--shadow)}
+  .kpi b{font-size:24px;display:block}
+  .kpi span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;align-items:center}
+  .toolbar input,.toolbar select{padding:7px 9px;border:1px solid var(--border);border-radius:7px;font-size:12px;background:#fff}
+  .toolbar input[type=search]{min-width:220px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:11px;padding:16px;margin-bottom:16px;box-shadow:var(--shadow)}
+  .card h3{margin:0 0 12px;font-size:14px}
+  .layout{display:grid;grid-template-columns:1fr 360px;gap:16px;align-items:start}
+  .event{border-bottom:1px solid var(--border);padding:10px 8px;cursor:pointer;border-radius:6px}
+  .event:hover{background:var(--panel-2)}
+  .event.active{background:#f0efff}
+  .event .t{font-size:11px;color:var(--muted);display:flex;gap:8px}
+  .event .title{font-size:13px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chip{font-size:10px;padding:1px 7px;border-radius:10px;background:var(--panel-2);color:var(--muted);margin-right:4px;white-space:nowrap}
+  .chip.verified{background:#e6f5ee;color:var(--verified)}
+  .chip.agent_reported{background:#f1eafe;color:var(--agent)}
+  .chip.inferred{background:#fdf0dc;color:var(--inferred)}
+  .day{font-size:11px;color:var(--muted);font-weight:600;padding:10px 8px 4px;text-transform:uppercase;letter-spacing:.04em}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:11px}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;background:var(--panel-2);padding:1px 4px;border-radius:4px;word-break:break-all}
+  .detail{position:sticky;top:22px}
+  .detail dl{display:grid;grid-template-columns:100px 1fr;gap:6px 10px;font-size:12px;margin:0}
+  .detail dt{color:var(--muted)}
+  .detail dd{margin:0;word-break:break-word}
+  .detail .body{white-space:pre-wrap;background:var(--panel-2);border-radius:8px;padding:10px;margin-top:10px;font-size:12px;max-height:300px;overflow:auto}
+  .warn{background:#fff8e6;border:1px solid #f5dfa0;color:#8a6400;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:12px}
+  .empty-inline{color:var(--muted);font-size:12px;padding:14px;text-align:center}
+  .badge-synth{font-size:10px;background:#fee;color:#b00;padding:2px 6px;border-radius:4px}
+  @media(max-width:1000px){.app{grid-template-columns:1fr}aside{height:auto;position:static}.layout{grid-template-columns:1fr}.detail{position:static}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="brand">
+      <div class="logo">◷</div>
+      <div><h1>本地编码时间线</h1><div class="sub">Multi-Agent Coding Activity Timeline</div></div>
+    </div>
+    <div class="controls">
+      <label for="kw">仓库名称关键词</label>
+      <input id="kw" type="text" placeholder="输入关键词过滤仓库，如 yueli / agent" oninput="renderRepoList()">
+      <label for="roots">扫描根目录（每行一个）</label>
+      <textarea id="roots" rows="2" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;resize:vertical"></textarea>
+      <button class="btn" id="btn-scan" onclick="scanRepos()" style="width:100%;margin-top:2px">⟳ 扫描仓库</button>
+      <div class="progress-wrap" id="repo-progress">
+        <div class="progress-bar"><i id="repo-bar"></i></div>
+        <div class="progress-msg" id="repo-msg"></div>
+      </div>
+    </div>
+    <div class="list-head"><span>项目（按 commit 时间倒序）</span><span id="repo-count">0</span></div>
+    <div class="repo-list" id="repo-list">
+      <div class="empty-inline">点击「扫描仓库」发现本机项目</div>
+    </div>
+  </aside>
+  <main>
+    <div class="topbar">
+      <div><h2 id="page-title">项目总览</h2><div class="crumb" id="crumb">从左侧选择一个项目查看活动聚簇</div></div>
+      <button class="btn ghost sm" id="btn-rescan" onclick="rescanCurrent()" style="display:none">⟳ 增量扫描此项目</button>
+    </div>
+    <div id="content">
+      <div class="empty"><div class="em">◷</div><div>扫描仓库后，选择项目查看多 Agent 活动聚簇时间线</div></div>
+    </div>
+  </main>
+</div>
+<script>
+let CONFIG={roots:[],contentMode:'summary'};
+let CATALOG={repositories:[]};
+let CURRENT=null;       // current RepositoryEntry
+let DETAIL=null;        // ViewerModel
+let FILTER={q:'',type:'',evidence:''};
+
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtTime=iso=>{if(!iso)return '-';const d=new Date(iso);return isNaN(d)?iso:d.toLocaleString('zh-CN',{hour12:false})};
+const fmtDay=iso=>{if(!iso)return '';const d=new Date(iso);return isNaN(d)?iso:d.toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})};
+
+async function init(){
+  try{
+    CONFIG=await (await fetch('/api/config')).json();
+    $('roots').value=(CONFIG.roots||[]).join('\n');
+    await refreshCatalog();
+  }catch(e){console.error(e)}
+}
+async function refreshCatalog(){
+  try{
+    CATALOG=await (await fetch('/api/catalog')).json();
+    if(CONFIG.lastKeyword && !$('kw').value) $('kw').value=CONFIG.lastKeyword;
+    renderRepoList();
+  }catch(e){console.error(e)}
+}
+function filteredRepos(){
+  const kw=$('kw').value.trim().toLowerCase();
+  return (CATALOG.repositories||[]).filter(r=>!kw||r.name.toLowerCase().includes(kw)||r.path.toLowerCase().includes(kw));
+}
+function renderRepoList(){
+  const list=filteredRepos();
+  $('repo-count').textContent=list.length;
+  if(!list.length){$('repo-list').innerHTML='<div class="empty-inline">无匹配仓库，试试调整关键词或扫描</div>';return}
+  $('repo-list').innerHTML=list.map(r=>`
+    <button class="repo ${CURRENT&&CURRENT.id===r.id?'active':''}" onclick="selectRepo('${esc(r.id)}')">
+      <div class="name"><span class="dot ${r.scanned?'scanned':''}"></span>${esc(r.name)} ${r.scanned?'<span class="tag">已扫描</span>':''}</div>
+      <div class="path">${esc(r.path)}</div>
+      <div class="meta"><span>🕒 ${r.latestCommitAt?fmtTime(r.latestCommitAt):'无提交'}</span>${r.eventCount!=null?`<span>${r.eventCount} 事件</span>`:''}</div>
+    </button>`).join('');
+}
+async function saveConfigFromUI(){
+  const roots=$('roots').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  if(roots.length) CONFIG=await (await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({roots})})).json();
+}
+async function scanRepos(){
+  const btn=$('btn-scan');btn.disabled=true;
+  $('repo-progress').style.display='block';$('repo-bar').style.width='0%';$('repo-msg').textContent='正在发现仓库…';
+  await saveConfigFromUI();
+  try{
+    const {job_id}=await (await fetch('/api/scan/repos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keyword:$('kw').value})})).json();
+    await streamJob(job_id,{
+      onProgress:e=>{if(e.progress!=null)$('repo-bar').style.width=e.progress+'%';if(e.message)$('repo-msg').textContent=e.message},
+      onDone:async()=>{await refreshCatalog();$('repo-msg').textContent='完成';setTimeout(()=>$('repo-progress').style.display='none',1200)}
+    });
+  }catch(e){$('repo-msg').textContent='扫描失败: '+e.message}
+  finally{btn.disabled=false}
+}
+function streamJob(jobId,handlers){
+  return new Promise((resolve,reject)=>{
+    const es=new EventSource('/api/jobs/'+jobId+'/events');
+    es.onmessage=e=>{
+      const d=JSON.parse(e.data);
+      if(d.type==='progress')handlers.onProgress?.(d);
+      if(d.type==='done'){es.close();handlers.onDone?.(d.data);resolve(d.data)}
+      if(d.type==='error'){es.close();handlers.onError?.(d);reject(new Error(d.message))}
+    };
+    es.onerror=()=>{es.close();reject(new Error('SSE 连接中断'))};
+  });
+}
+async function selectRepo(id){
+  const r=(CATALOG.repositories||[]).find(x=>x.id===id);if(!r)return;
+  CURRENT=r;renderRepoList();
+  $('page-title').textContent=r.name;
+  $('crumb').textContent=r.path+(r.latestCommitAt?' · 最近提交 '+fmtTime(r.latestCommitAt):'');
+  $('btn-rescan').style.display='inline-flex';
+  if(r.scanned && await hasPackage(id)){await loadDetail(id)}
+  else{await scanProject(id)}
+}
+async function hasPackage(id){
+  try{const d=await (await fetch('/api/project/'+id+'/detail')).json();return !d.error}catch{return false}
+}
+async function scanProject(id){
+  $('content').innerHTML='<div class="empty"><div class="em">⏳</div><div id="scan-status">正在扫描项目活动…</div></div>';
+  try{
+    const {job_id}=await (await fetch('/api/scan/project',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({projectId:id})})).json();
+    await streamJob(job_id,{
+      onProgress:e=>{const el=$('scan-status');if(el)el.textContent=e.message||'扫描中…'},
+      onDone:async()=>{await refreshCatalog();CURRENT=(CATALOG.repositories||[]).find(x=>x.id===id)||CURRENT;await loadDetail(id)}
+    });
+  }catch(e){$('content').innerHTML='<div class="empty"><div class="em">⚠️</div><div>扫描失败: '+esc(e.message)+'</div></div>'}
+}
+async function rescanCurrent(){if(CURRENT)await scanProject(CURRENT.id)}
+async function loadDetail(id){
+  const d=await (await fetch('/api/project/'+id+'/detail')).json();
+  if(d.error){$('content').innerHTML='<div class="warn">'+esc(d.error)+'</div>';return}
+  DETAIL=d;FILTER={q:'',type:'',evidence:''};renderDetail();
+}
+function visibleEvents(){
+  if(!DETAIL)return[];
+  const q=FILTER.q.toLowerCase();
+  return (DETAIL.events||[]).filter(e=>{
+    if(FILTER.type&&e.type!==FILTER.type)return false;
+    if(FILTER.evidence&&e.evidence!==FILTER.evidence)return false;
+    if(q){const hay=[e.title,e.body,e.type,e.agentName,e.commit,e.branch,e.provenance?.sourcePath,(e.files||[]).join(' ')].join(' ').toLowerCase();if(!hay.includes(q))return false}
+    return true;
+  });
+}
+function renderDetail(){
+  if(!DETAIL)return;
+  const m=DETAIL.meta,c=m.counts;
+  const types=[...new Set((DETAIL.events||[]).map(e=>e.type))].sort();
+  const opts=types.map(t=>`<option value="${esc(t)}" ${FILTER.type===t?'selected':''}>${esc(t)}</option>`).join('');
+  const vis=visibleEvents();
+  $('content').innerHTML=`
+    ${m.identityStrong?'':('<div class="warn">项目身份为弱证据（'+esc(m.identityBasis)+'），活动归属需人工确认。</div>')}
+    <div class="kpis">
+      <div class="kpi"><b>${c.events}</b><span>事件</span></div>
+      <div class="kpi"><b>${c.sessions}</b><span>会话</span></div>
+      <div class="kpi"><b>${c.agents}</b><span>Agent</span></div>
+      <div class="kpi"><b>${c.commits}</b><span>提交</span></div>
+      <div class="kpi"><b>${c.pushes}</b><span>推送</span></div>
+      <div class="kpi"><b>${c.devices}</b><span>设备</span></div>
+    </div>
+    <div class="toolbar">
+      <input id="f-q" type="search" placeholder="搜索事件、提交、来源…" value="${esc(FILTER.q)}" oninput="FILTER.q=this.value;renderTimelineOnly()">
+      <select id="f-type" onchange="FILTER.type=this.value;renderTimelineOnly()"><option value="">所有事件类型</option>${opts}</select>
+      <select id="f-evidence" onchange="FILTER.evidence=this.value;renderTimelineOnly()"><option value="">所有证据等级</option>${['verified','agent_reported','inferred','unknown'].map(x=>`<option ${FILTER.evidence===x?'selected':''}>${x}</option>`).join('')}</select>
+      <span style="font-size:12px;color:var(--muted)">显示 <b id="shown">${vis.length}</b> / ${c.events}</span>
+      <button class="btn ghost sm" onclick="resetFilter()">重置</button>
+    </div>
+    <div class="layout">
+      <div>
+        <div class="card"><h3>统一时间线</h3><div id="timeline"></div></div>
+        <div class="card"><h3>会话（${(DETAIL.sessions||[]).length}）</h3>${renderSessions()}</div>
+        <div class="card"><h3>Git 提交（${(DETAIL.commits||[]).length}）</h3>${renderCommits()}</div>
+      </div>
+      <div class="card detail" id="detail"><div class="empty-inline">选择一个事件查看来源与证据</div></div>
+    </div>`;
+  renderTimelineOnly();
+  if(vis.length)selectEvent(vis[vis.length-1].id);
+}
+function renderTimelineOnly(){
+  const vis=visibleEvents();
+  const shown=$('shown');if(shown)shown.textContent=vis.length;
+  const host=$('timeline');if(!host)return;
+  if(!vis.length){host.innerHTML='<div class="empty-inline">没有匹配的事件</div>';return}
+  let day='';let html='';
+  for(const e of vis){
+    const d=fmtDay(e.at);if(d!==day){day=d;html+=`<div class="day">${esc(d)}</div>`}
+    html+=`<div class="event ${DETAIL&&DETAIL.__sel===e.id?'active':''}" onclick="selectEvent('${esc(e.id)}')">
+      <div class="t"><span>${e.at?new Date(e.at).toLocaleTimeString('zh-CN',{hour12:false}):''}</span></div>
+      <div class="title">${esc(e.title||e.type)}</div>
+      <div><span class="chip">${esc(e.type)}</span><span class="chip ${esc(e.evidence)}">${esc(e.evidence)}</span>${e.commit?`<span class="chip verified">commit ${esc(String(e.commit).slice(0,10))}</span>`:''}</div>
+    </div>`;
+  }
+  host.innerHTML=html;
+}
+function resetFilter(){FILTER={q:'',type:'',evidence:''};renderDetail()}
+function selectEvent(id){
+  if(!DETAIL)return;DETAIL.__sel=id;
+  const e=(DETAIL.events||[]).find(x=>x.id===id);if(!e)return;
+  document.querySelectorAll('.event').forEach(n=>n.classList.remove('active'));
+  const host=$('detail');
+  host.innerHTML=`<h3>事件详情</h3><dl>
+    <dt>时间</dt><dd>${esc(e.at)} <span class="chip">${esc(e.sortBasis)}</span></dd>
+    <dt>类型</dt><dd>${esc(e.type)}</dd>
+    <dt>证据</dt><dd><span class="chip ${esc(e.evidence)}">${esc(e.evidence)}</span></dd>
+    <dt>Agent</dt><dd>${esc(e.agentName||e.agentId)}</dd>
+    <dt>设备</dt><dd><code>${esc(e.deviceId)}</code></dd>
+    ${e.sessionId?`<dt>会话</dt><dd><code>${esc(e.sessionId)}</code></dd>`:''}
+    ${e.commit?`<dt>提交</dt><dd><code>${esc(e.commit)}</code></dd>`:''}
+    <dt>来源类型</dt><dd>${esc(e.provenance?.sourceType)} / ${esc(e.provenance?.captureLevel)}</dd>
+    ${e.provenance?.sourcePath?`<dt>来源文件</dt><dd><code>${esc(e.provenance.sourcePath)}</code></dd>`:''}
+    <dt>解析器</dt><dd>${esc(e.parser?.adapterId)} v${esc(e.parser?.adapterVersion)}</dd>
+  </dl>${e.body?`<div class="body">${esc(e.body)}</div>`:''}`;
+  renderTimelineOnly();
+}
+function renderSessions(){
+  const rows=DETAIL.sessions||[];if(!rows.length)return'<div class="empty-inline">无匹配会话</div>';
+  return `<table><thead><tr><th>最近活动</th><th>Agent</th><th>设备</th><th>事件</th><th>匹配</th><th>来源</th></tr></thead><tbody>${rows.map(s=>`<tr>
+    <td>${s.lastSeen?fmtTime(s.lastSeen):'-'}</td><td>${esc(s.agent)}</td><td><code>${esc(s.device).slice(0,12)}</code></td>
+    <td>${s.eventCount}</td><td><span class="chip ${s.matchConfidence==='exact'||s.matchConfidence==='strong'?'verified':'inferred'}">${esc(s.matchConfidence)}</span></td>
+    <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><code>${esc(s.source)}</code></td></tr>`).join('')}</tbody></table>`;
+}
+function renderCommits(){
+  const rows=DETAIL.commits||[];if(!rows.length)return'<div class="empty-inline">无 Git 提交</div>';
+  return `<table><thead><tr><th>时间</th><th>short</th><th>说明</th><th>作者</th><th>差异</th></tr></thead><tbody>${rows.map(c=>`<tr>
+    <td>${c.at?fmtTime(c.at):'-'}</td><td><code>${esc(c.short)}</code></td><td>${esc(c.message||'')}</td><td>${esc(c.author||'')}</td>
+    <td>${c.files!=null?`${c.files} 文件 / +${c.insertions??0} -${c.deletions??0}`:''}</td></tr>`).join('')}</tbody></table>`;
+}
+init();
+</script>
+</body>
+</html>
