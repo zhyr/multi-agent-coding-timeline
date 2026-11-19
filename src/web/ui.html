@@ -128,6 +128,12 @@
       <input id="kw" type="text" placeholder="输入关键词过滤仓库，如 yueli / agent" oninput="renderRepoList()">
       <label for="roots">扫描根目录（每行一个）</label>
       <textarea id="roots" rows="2" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;resize:vertical"></textarea>
+      <label for="content-mode">正文留存</label>
+      <select id="content-mode" onchange="saveConfigFromUI()" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px">
+        <option value="summary">摘要（安全，默认）</option>
+        <option value="full">完整正文（含源码，谨慎分享）</option>
+        <option value="metadata_only">仅元数据</option>
+      </select>
       <button class="btn" id="btn-scan" onclick="scanRepos()" style="width:100%;margin-top:2px">⟳ 扫描仓库</button>
       <div class="progress-wrap" id="repo-progress">
         <div class="progress-bar"><i id="repo-bar"></i></div>
@@ -178,6 +184,7 @@ async function init(){
   try{
     CONFIG=await (await fetch('/api/config')).json();
     $('roots').value=(CONFIG.roots||[]).join('\n');
+    $('content-mode').value=CONFIG.contentMode||'summary';
     await refreshCatalog();
   }catch(e){console.error(e)}
 }
@@ -205,7 +212,8 @@ function renderRepoList(){
 }
 async function saveConfigFromUI(){
   const roots=$('roots').value.split('\n').map(s=>s.trim()).filter(Boolean);
-  if(roots.length) CONFIG=await (await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({roots})})).json();
+  const contentMode=$('content-mode')?.value||'summary';
+  CONFIG=await (await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({roots,contentMode})})).json();
 }
 async function scanRepos(){
   const btn=$('btn-scan');btn.disabled=true;
@@ -378,6 +386,10 @@ function selectEvent(id){
     <dt>来源类型</dt><dd>${esc(e.provenance?.sourceType)} / ${esc(e.provenance?.captureLevel)}</dd>
     ${e.provenance?.sourcePath?`<dt>来源文件</dt><dd><code>${esc(e.provenance.sourcePath)}</code></dd>`:''}
     <dt>解析器</dt><dd>${esc(e.parser?.adapterId)} v${esc(e.parser?.adapterVersion)}</dd>
+    ${e.toolName?`<dt>工具</dt><dd><code>${esc(e.toolName)}</code></dd>`:''}
+    ${e.executionStatus?`<dt>执行状态</dt><dd>${esc(e.executionStatus)}</dd>`:''}
+    ${e.errorMessage?`<dt>错误</dt><dd>${esc(e.errorMessage)}</dd>`:''}
+    ${e.contextRefs?.length?`<dt>上下文引用</dt><dd>${e.contextRefs.map(r=>`<code>${esc(r)}</code>`).join(' ')}</dd>`:''}
   </dl>${e.body?`<div class="body">${esc(e.body)}</div>`:''}`;
   renderTimelineOnly();
 }

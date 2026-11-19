@@ -65,6 +65,8 @@ export function normalizeRecord(record: AdapterRecord, ctx: NormalizeContext): A
     tool_call_id: record.tool_call_id,
     execution_status: record.execution_status,
     error_message: record.error_message,
+    context_refs:
+      ctx.contentMode === 'metadata_only' ? undefined : (record.metadata?.context_refs as string[] | undefined),
   };
   const cleanedActivity = Object.fromEntries(
     Object.entries(activity).filter(([, v]) => v !== undefined),

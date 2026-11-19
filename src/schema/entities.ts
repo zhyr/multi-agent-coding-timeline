@@ -47,6 +47,8 @@ export const ActivityEventSchema = obj({
     tool_call_id: z.string().optional(),
     execution_status: z.string().optional(),
     error_message: z.string().optional(),
+    /** File/symbol references verbatim from the source message (e.g. Cursor `@file`). */
+    context_refs: z.array(z.string()).optional(),
   }).optional(),
 
   git: obj({

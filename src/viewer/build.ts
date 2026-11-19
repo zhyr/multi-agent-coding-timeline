@@ -19,6 +19,7 @@ export interface ViewerEvent {
   toolName?: string;
   executionStatus?: string;
   errorMessage?: string;
+  contextRefs?: string[];
   commit?: string;
   branch?: string;
   files?: string[];
@@ -171,7 +172,9 @@ function eventTitle(event: ActivityEvent, allowContent: boolean): string {
 
 function eventBody(event: ActivityEvent, allowContent: boolean): string | undefined {
   if (!allowContent) return undefined;
-  const content = event.activity?.content;
+  // Default scans use content_mode=summary, where the normalizer stores only
+  // content_summary. Fall back to it so messages are never blank in the viewer.
+  const content = event.activity?.content ?? event.activity?.content_summary;
   if (!content) return undefined;
   return content.length <= BODY_LIMIT ? content : `${content.slice(0, BODY_LIMIT)}\n… (truncated in viewer)`;
 }
@@ -257,6 +260,7 @@ export function buildViewerModel(data: TimelineData, options: ViewerOptions = {}
       toolName: event.activity?.tool_name,
       executionStatus: event.activity?.execution_status,
       errorMessage: event.activity?.error_message,
+      contextRefs: event.activity?.context_refs,
       commit: event.git?.commit_sha,
       branch: event.git?.branch,
       files: event.git?.changed_files,
@@ -579,6 +583,7 @@ const VIEWER_JS = `
     row(dl,"tool",e.toolName);
     row(dl,"status",e.executionStatus);
     row(dl,"error",e.errorMessage);
+    row(dl,"context refs",(e.contextRefs||[]).join(", "));
     row(dl,"commit",e.commit);
     row(dl,"branch",e.branch);
     row(dl,"files",(e.files||[]).join(", "));

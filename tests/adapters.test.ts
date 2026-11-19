@@ -291,6 +291,58 @@ describe('Cursor adapter', () => {
     expect(result.records.every((r) => r.timestamp_precision === 'unknown')).toBe(true);
   });
 
+  it('extracts full text blocks, tool calls, and user context refs from real array content', async () => {
+    const relative = 'agent-transcripts/u1/u3.jsonl';
+    await writeCursorTranscript(path.join(root, relative));
+    const result = await new CursorAdapter().parseSession(sessionFor(relative, 'cursor'));
+    const user = result.records.find((r) => r.event_type === 'agent.user_request.submitted');
+    expect(user?.content).toBe('Fix the parser @src/index.ts');
+    expect(user?.metadata?.context_refs).toEqual(['src/index.ts']);
+    const assistant = result.records.find((r) => r.event_type === 'agent.response.received');
+    expect(assistant?.content).toBe('Parser fixed\nAll tests pass');
+
+    const tools = result.records.filter((r) => r.event_type === 'agent.tool.started');
+    expect(tools).toHaveLength(2);
+    expect(tools[0]?.tool_name).toBe('Read');
+    expect(tools[0]?.content).toContain('/tmp/fixture-project/src/index.ts');
+    expect(tools[0]?.native_event_id).toBe('line:2:tool:3');
+    expect(tools[1]?.tool_name).toBe('Grep');
+    const messageRecords = result.records.filter((r) => r.event_type !== 'agent.execution.completed');
+    expect(messageRecords.every((r) => r.evidence_level === 'verified')).toBe(true);
+  });
+
+  it('preserves real turn_ended status and error', async () => {
+    const relative = 'agent-transcripts/u1/u4.jsonl';
+    await writeJsonl(path.join(root, relative), [
+      { type: 'turn_ended', status: 'success' },
+      { type: 'turn_ended', status: 'error', error: 'composer_abort_controller_aborted' },
+    ]);
+    const result = await new CursorAdapter().parseSession(sessionFor(relative, 'cursor'));
+    const completed = result.records.find((r) => r.event_type === 'agent.execution.completed');
+    const failed = result.records.find((r) => r.event_type === 'agent.execution.failed');
+    expect(completed?.execution_status).toBe('success');
+    expect(completed?.error_message).toBeUndefined();
+    expect(failed?.execution_status).toBe('error');
+    expect(failed?.error_message).toBe('composer_abort_controller_aborted');
+  });
+
+  it('reports unknown content block types instead of dropping them silently', async () => {
+    const relative = 'agent-transcripts/u1/u5.jsonl';
+    await writeJsonl(path.join(root, relative), [
+      { role: 'assistant', message: { content: [{ type: 'reasoning', text: 'hidden' }] } },
+    ]);
+    const result = await new CursorAdapter().parseSession(sessionFor(relative, 'cursor'));
+    expect(result.issues.some((i) => i.reason.includes('unsupported content block type: reasoning'))).toBe(true);
+    expect(result.records.some((r) => r.event_type === 'agent.response.received' && r.content === undefined)).toBe(true);
+  });
+
+  it('declares tool_calls verified and does not claim thinking or llm request synthesis', () => {
+    const caps = new CursorAdapter().getCapabilities();
+    expect(caps.tool_calls).toBe('verified');
+    expect(caps.ai_request).toBe('unavailable');
+    expect(caps.notes.some((n) => n.includes('NOT synthesized'))).toBe(true);
+  });
+
   it('reports unsupported record types', async () => {
     const relative = 'agent-transcripts/u1/u2.jsonl';
     await writeJsonl(path.join(root, relative), [{ role: 'system', type: 'future_type' }]);

@@ -119,9 +119,19 @@ export async function writeQoderSession(target: string, cwd: string, sessionId =
 
 export async function writeCursorTranscript(target: string): Promise<void> {
   await writeJsonl(target, [
-    { role: 'user', message: { content: 'Fix the parser' } },
-    { role: 'assistant', message: { content: 'Parser fixed' } },
-    { type: 'turn_ended' },
+    { role: 'user', message: { content: [{ type: 'text', text: 'Fix the parser @src/index.ts' }] } },
+    {
+      role: 'assistant',
+      message: {
+        content: [
+          { type: 'text', text: 'Parser fixed' },
+          { type: 'text', text: 'All tests pass' },
+          { type: 'tool_use', name: 'Read', input: { path: '/tmp/fixture-project/src/index.ts' } },
+          { type: 'tool_use', name: 'Grep', input: { pattern: 'parser' } },
+        ],
+      },
+    },
+    { type: 'turn_ended', status: 'success' },
   ]);
 }
 

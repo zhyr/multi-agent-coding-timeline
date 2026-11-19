@@ -95,6 +95,35 @@ describe('viewer', () => {
     expect(html).not.toContain('Please');
   });
 
+  it('falls back to content_summary for body when only a summary was retained', () => {
+    const event = makeEvent({
+      event_id: 'evt_summary',
+      dedup_key: 'dedup_summary',
+      activity: { role: 'user', content_summary: 'summary only body', tool_name: 'Read' },
+    });
+    const model = buildViewerModel(makeTimelineData({ events: [event] }));
+    expect(model.events[0]?.body).toBe('summary only body');
+  });
+
+  it('projects tool calls, execution state and context refs into the viewer model', () => {
+    const event = makeEvent({
+      event_id: 'evt_tool',
+      dedup_key: 'dedup_tool',
+      activity: {
+        role: 'assistant',
+        tool_name: 'Grep',
+        execution_status: 'error',
+        error_message: 'aborted',
+        context_refs: ['src/index.ts', 'docs/readme.md'],
+      },
+    });
+    const model = buildViewerModel(makeTimelineData({ events: [event] }));
+    expect(model.events[0]?.toolName).toBe('Grep');
+    expect(model.events[0]?.executionStatus).toBe('error');
+    expect(model.events[0]?.errorMessage).toBe('aborted');
+    expect(model.events[0]?.contextRefs).toEqual(['src/index.ts', 'docs/readme.md']);
+  });
+
   it('sorts events by occurred time with session order as a tiebreaker', () => {
     const early = makeEvent({
       event_id: 'evt_early',
