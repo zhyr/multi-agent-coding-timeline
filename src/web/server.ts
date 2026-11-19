@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { createReadStream } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import { runScan } from '../scan/engine.js';
-import { loadViewerModel, buildDetailPage, eventTypes, agentOptions } from './detail.js';
+import { loadViewerModel, buildDetailPage, eventTypes, agentOptions, sessionSegments } from './detail.js';
 import { exportJsonl, exportZip, lineAllowed, type ExportFormat } from './export.js';
 
 /** Web app version (kept local to avoid a circular import with the CLI layer). */
@@ -262,6 +262,8 @@ export async function startServer(options: ServeOptions = {}): Promise<RunningSe
           type: url.searchParams.get('type') ?? '',
           evidence: url.searchParams.get('evidence') ?? '',
           agent: url.searchParams.get('agent') ?? '',
+          device: url.searchParams.get('device') ?? '',
+          session: url.searchParams.get('session') ?? '',
           offset: num(url.searchParams.get('offset'), 0),
           limit: num(url.searchParams.get('limit'), 200),
         });
@@ -270,6 +272,33 @@ export async function startServer(options: ServeOptions = {}): Promise<RunningSe
           types: eventTypes(loaded),
           agentOptions: agentOptions(loaded),
         }); return;
+      }
+
+      const segments = pathname.match(/^\/api\/project\/([^/]+)\/segments$/);
+      if (req.method === 'GET' && segments) {
+        const projectId = segments[1];
+        if (!await hasPackage(dataDir, projectId)) {
+          respond(res, 404, { error: 'project not scanned yet' }); return;
+        }
+        const loaded = await loadViewerModel(dataDir, projectId);
+        if (!loaded) {
+          respond(res, 422, { error: 'package unreadable or empty' }); return;
+        }
+        const num = (v: string | null, fallback: number) => {
+          const n = v == null ? NaN : Number(v);
+          return Number.isFinite(n) ? n : fallback;
+        };
+        const page = sessionSegments(loaded, {
+          q: url.searchParams.get('q') ?? '',
+          type: url.searchParams.get('type') ?? '',
+          evidence: url.searchParams.get('evidence') ?? '',
+          agent: url.searchParams.get('agent') ?? '',
+          device: url.searchParams.get('device') ?? '',
+          session: url.searchParams.get('session') ?? '',
+          offset: num(url.searchParams.get('offset'), 0),
+          limit: num(url.searchParams.get('limit'), 200),
+        });
+        respond(res, 200, page); return;
       }
 
       const exportMatch = pathname.match(/^\/api\/project\/([^/]+)\/export$/);

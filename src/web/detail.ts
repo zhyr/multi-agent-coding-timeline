@@ -56,8 +56,39 @@ export interface DetailQuery {
   type: string;
   evidence: string;
   agent: string;
+  /** Raw device id (matches ViewerEvent.deviceId, which may include a scanner suffix). */
+  device: string;
+  /** Native/canonical session id (sess_...). */
+  session: string;
   offset: number;
   limit: number;
+}
+
+/**
+ * A conversation segment: all events sharing the same (session id, device, agent)
+ * triple, rendered as one chronological list. This is the identity that keeps
+ * parallel subagents and cross-device replays from being merged incorrectly.
+ */
+export interface SessionSegment {
+  sessionId: string;
+  deviceId: string;
+  agentId: string;
+  agentName: string;
+  eventCount: number;
+  firstAt: string;
+  lastAt: string;
+  firstTitle: string;
+  evidence: string;
+  incomplete: boolean;
+}
+
+export interface SegmentPage {
+  segments: SessionSegment[];
+  total: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+  signature: string;
 }
 
 export interface DetailPage {
@@ -76,10 +107,20 @@ export interface DetailPage {
   signature: string;
 }
 
-function matches(event: ViewerEvent, q: string, type: string, evidence: string, agent: string): boolean {
+function matches(
+  event: ViewerEvent,
+  q: string,
+  type: string,
+  evidence: string,
+  agent: string,
+  device: string,
+  session: string,
+): boolean {
   if (type && event.type !== type) return false;
   if (evidence && event.evidence !== evidence) return false;
   if (agent && event.agentId !== agent && event.agentName !== agent) return false;
+  if (device && event.deviceId !== device) return false;
+  if (session && event.sessionId !== session) return false;
   if (q) {
     const needle = q.toLowerCase();
     const hay = [
@@ -95,8 +136,9 @@ function matches(event: ViewerEvent, q: string, type: string, evidence: string, 
 /** Build a small page from the cached model. */
 export function buildDetailPage(loaded: { model: ViewerModel; signature: string }, query: DetailQuery): DetailPage {
   const { model, signature } = loaded;
-  const filtered = query.q || query.type || query.evidence || query.agent
-    ? model.events.filter((e) => matches(e, query.q, query.type, query.evidence, query.agent))
+  const filtered = query.q || query.type || query.evidence || query.agent || query.device || query.session
+    ? model.events.filter((e) =>
+        matches(e, query.q, query.type, query.evidence, query.agent, query.device, query.session))
     : model.events;
   const offset = Math.max(0, Math.min(query.offset, filtered.length));
   const limit = Math.max(1, Math.min(query.limit, 500));
@@ -122,6 +164,85 @@ export function buildDetailPage(loaded: { model: ViewerModel; signature: string 
 /** Distinct event types for the filter dropdown, computed once from cached model. */
 export function eventTypes(loaded: { model: ViewerModel }): string[] {
   return [...new Set(loaded.model.events.map((e) => e.type))].sort();
+}
+
+const segmentCache = new Map<string, { segments: SessionSegment[]; signature: string }>();
+
+/**
+ * Aggregate events into conversation segments keyed by (sessionId, deviceId, agentId).
+ * Computed once per package version and cached; a 164k-event project must not be
+ * regrouped on every request. Segments are ordered by last activity descending
+ * so the most recent conversation appears first.
+ */
+function allSegments(loaded: { model: ViewerModel; signature: string }): SessionSegment[] {
+  const { model, signature } = loaded;
+  const cached = segmentCache.get(model.meta.projectId);
+  if (cached && cached.signature === signature) return cached.segments;
+
+  const groups = new Map<string, SessionSegment>();
+  for (const e of model.events) {
+    const key = `${e.sessionId ?? ''}\u0000${e.deviceId}\u0000${e.agentId}`;
+    let seg = groups.get(key);
+    if (!seg) {
+      seg = {
+        sessionId: e.sessionId ?? '',
+        deviceId: e.deviceId,
+        agentId: e.agentId,
+        agentName: e.agentName || e.agentId,
+        eventCount: 0,
+        firstAt: e.at,
+        lastAt: e.at,
+        firstTitle: e.title,
+        evidence: e.evidence,
+        incomplete: false,
+      };
+      groups.set(key, seg);
+    }
+    seg.eventCount += 1;
+    if (e.at && (!seg.firstAt || e.at < seg.firstAt)) seg.firstAt = e.at;
+    if (e.at && (!seg.lastAt || e.at > seg.lastAt)) seg.lastAt = e.at;
+  }
+
+  const segments = [...groups.values()].sort(
+    (a, b) => (b.lastAt || '').localeCompare(a.lastAt || '') || a.sessionId.localeCompare(b.sessionId),
+  );
+  segmentCache.set(model.meta.projectId, { segments, signature });
+  return segments;
+}
+
+/**
+ * A page of conversation segments for one dimension. Clicking Agent / device /
+ * session in the event detail panel calls this with the corresponding filter,
+ * producing a chronological list of every conversation for that value.
+ */
+export function sessionSegments(
+  loaded: { model: ViewerModel; signature: string },
+  query: DetailQuery,
+): SegmentPage {
+  const { signature } = loaded;
+  const all = allSegments(loaded);
+  const needle = query.q ? query.q.toLowerCase() : '';
+  const filtered = all.filter((s) => {
+    if (query.agent && s.agentId !== query.agent && s.agentName !== query.agent) return false;
+    if (query.device && s.deviceId !== query.device) return false;
+    if (query.session && s.sessionId !== query.session) return false;
+    if (needle) {
+      const hay = [s.sessionId, s.deviceId, s.agentId, s.agentName, s.firstTitle].join(' ').toLowerCase();
+      if (!hay.includes(needle)) return false;
+    }
+    return true;
+  });
+  const offset = Math.max(0, Math.min(query.offset, filtered.length));
+  const limit = Math.max(1, Math.min(query.limit, 500));
+  const page = filtered.slice(offset, offset + limit);
+  return {
+    segments: page,
+    total: filtered.length,
+    offset,
+    limit,
+    hasMore: offset + page.length < filtered.length,
+    signature,
+  };
 }
 
 /** Distinct code agents actually present in the events, for the agent filter. */

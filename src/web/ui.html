@@ -91,6 +91,26 @@
   .warn{background:#fff8e6;border:1px solid #f5dfa0;color:#8a6400;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:12px}
   .empty-inline{color:var(--muted);font-size:12px;padding:14px;text-align:center}
   .badge-synth{font-size:10px;background:#fee;color:#b00;padding:2px 6px;border-radius:4px}
+  /* Clickable detail fields and segment drill-down */
+  .linkbtn{display:inline-block;max-width:100%;background:none;border:0;padding:0;margin:0;color:var(--primary);font:inherit;cursor:pointer;text-align:left;word-break:break-word;overflow-wrap:anywhere;text-decoration:underline;text-underline-offset:2px}
+  .linkbtn:hover{filter:brightness(1.15)}
+  .linkbtn code{background:none;padding:0;color:inherit}
+  .drill-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 12px;font-size:12px;color:var(--muted)}
+  .drill-bar .chip.drill{background:#eef3ff;border:1px solid #c9d8ff;color:#2846a0;cursor:default}
+  .chip.drill b{cursor:pointer;margin-left:4px;font-size:14px;line-height:1}
+  .segcard h3{margin:0 0 6px;font-size:14px}
+  .seg-count{font-size:12px;color:var(--muted);font-weight:400}
+  .seg-note{font-size:11px;color:var(--muted);margin-bottom:10px;line-height:1.5}
+  .seg-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px}
+  .seg{display:block;width:100%;text-align:left;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:10px;cursor:pointer;font:inherit;color:var(--text);min-width:0}
+  .seg:hover{border-color:var(--primary);background:var(--panel)}
+  .seg-h{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px}
+  .seg-device{margin-bottom:5px}
+  .seg-title{font-size:12px;line-height:1.45;white-space:normal;overflow-wrap:anywhere;word-break:break-word;max-height:3.2em;overflow:hidden}
+  .seg-meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px;font-size:11px;color:var(--muted)}
+  @media(max-width:600px){
+    .seg-list{grid-template-columns:1fr}
+  }
   /* Responsive breakpoints: sidebars collapse, grids become single-column, nothing overflows. */
   @media(max-width:1200px){
     .app{grid-template-columns:minmax(200px,240px) minmax(0,1fr)}
@@ -164,14 +184,19 @@ let CONFIG={roots:[],contentMode:'summary'};
 let CATALOG={repositories:[]};
 let CURRENT=null;       // current RepositoryEntry
 let DETAIL=null;        // current DetailPage (paged)
-let FILTER={q:'',type:'',evidence:'',agent:''};
+let FILTER={q:'',type:'',evidence:'',agent:'',device:'',session:''};
 let PAGE_LIMIT=200;
 let TYPES=[];           // event types from server
 let AGENTS=[];          // {id,name} code agents present in events
 let FILTER_TIMER=null;
+let SEGMENTS=null;      // current SegmentPage (drill-down view)
+let SEGVIEW=null;       // {field,value} that opened the segment view
 
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// Safe JS string literal inside a double-quoted HTML attribute: escape HTML
+// first, then embed as a JSON string. Used for dynamic onclick arguments.
+const jsarg=s=>esc(JSON.stringify(String(s??'')));
 const senderChip=e=>{
   const s=e.sender||{kind:'source',label:e.agentName||'系统',detail:e.agentName};
   const text=s.kind==='subagent'?(s.detail||s.label):(s.detail&&s.detail!==s.label?s.detail:s.label);
@@ -273,24 +298,36 @@ function exportProject(fmt){
 }
 async function loadDetail(id){
   $('content').innerHTML='<div class="empty"><div class="em">⏳</div><div>正在载入项目详情…</div></div>';
-  FILTER={q:'',type:'',evidence:'',agent:''};
+  FILTER={q:'',type:'',evidence:'',agent:'',device:'',session:''};
+  SEGMENTS=null;SEGVIEW=null;
   DETAIL=await fetchDetailPage(0);
   if(!DETAIL||DETAIL.error){$('content').innerHTML='<div class="warn">'+esc(DETAIL?.error||'载入失败')+'</div>';return}
   TYPES=DETAIL.types||[];
   AGENTS=DETAIL.agentOptions||[];
   renderDetail();
 }
+function filterParams(){
+  return new URLSearchParams({q:FILTER.q,type:FILTER.type,evidence:FILTER.evidence,agent:FILTER.agent,device:FILTER.device,session:FILTER.session});
+}
 async function fetchDetailPage(offset){
   if(!CURRENT)return null;
-  const p=new URLSearchParams({q:FILTER.q,type:FILTER.type,evidence:FILTER.evidence,agent:FILTER.agent,offset:String(offset),limit:String(PAGE_LIMIT)});
+  const p=filterParams();p.set('offset',String(offset));p.set('limit',String(PAGE_LIMIT));
   const res=await fetch('/api/project/'+encodeURIComponent(CURRENT.id)+'/detail?'+p);
+  return await res.json();
+}
+async function fetchSegmentsPage(offset){
+  if(!CURRENT)return null;
+  const p=filterParams();p.set('offset',String(offset));p.set('limit',String(PAGE_LIMIT));
+  const res=await fetch('/api/project/'+encodeURIComponent(CURRENT.id)+'/segments?'+p);
   return await res.json();
 }
 async function applyServerFilter(){
   // Debounced server-side filtering: refetch first page with current filters.
   DETAIL=await fetchDetailPage(0);
+  if(SEGVIEW)SEGMENTS=await fetchSegmentsPage(0);
   if(!DETAIL||DETAIL.error)return;
   renderTimelineOnly();
+  renderSegmentView();
   const shown=$('shown');if(shown)shown.textContent=DETAIL.total;
   const cnt=$('filter-count');if(cnt)cnt.textContent=DETAIL.total;
 }
@@ -302,6 +339,44 @@ async function loadMoreEvents(){
   DETAIL.offset=next.offset;
   DETAIL.hasMore=next.hasMore;
   renderTimelineOnly();
+}
+// Click Agent / device / session in the event detail panel: aggregate every
+// conversation for that value into a chronological segment list.
+async function drillTo(field,value){
+  if(value==null||value==='')return;
+  FILTER[field]=String(value);
+  SEGVIEW={field,value:String(value)};
+  SEGMENTS=await fetchSegmentsPage(0);
+  DETAIL=await fetchDetailPage(0);
+  renderDetail();
+  const segHost=$('segment-view');
+  if(segHost)segHost.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+// Click a segment: drill into exactly that conversation as a chronological event list.
+async function openSegment(idx){
+  if(!SEGMENTS)return;
+  const s=(SEGMENTS.segments||[])[idx];if(!s)return;
+  FILTER.session=s.sessionId;FILTER.device=s.deviceId;FILTER.agent=s.agentId;
+  DETAIL=await fetchDetailPage(0);
+  renderDetail();
+  const tl=$('timeline');if(tl)tl.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+async function loadMoreSegments(){
+  if(!SEGMENTS||!SEGMENTS.hasMore)return;
+  const next=await fetchSegmentsPage(SEGMENTS.offset+SEGMENTS.segments.length);
+  if(!next||next.error)return;
+  SEGMENTS.segments=SEGMENTS.segments.concat(next.segments);
+  SEGMENTS.offset=next.offset;SEGMENTS.hasMore=next.hasMore;
+  renderSegmentView();
+}
+function clearDimension(field){
+  FILTER[field]='';
+  if(SEGVIEW&&SEGVIEW.field===field){SEGVIEW=null;SEGMENTS=null;}
+  applyServerFilter().then(renderDetail);
+}
+function resetSegments(){
+  FILTER.agent='';FILTER.device='';FILTER.session='';SEGVIEW=null;SEGMENTS=null;
+  applyServerFilter().then(renderDetail);
 }
 function renderDetail(){
   if(!DETAIL)return;
@@ -325,8 +400,10 @@ function renderDetail(){
       <span style="font-size:12px;color:var(--muted)">匹配 <b id="shown">${DETAIL.total}</b> / ${c.events}</span>
       <button class="btn ghost sm" onclick="resetFilter()">重置</button>
     </div>
+    <div id="drill-bar">${renderDrillBar()}</div>
     <div class="layout">
       <div>
+        <div id="segment-view"></div>
         <div class="card"><h3>统一时间线</h3><div id="timeline"></div><div id="more-wrap"></div></div>
         <div class="card"><h3>会话（${(DETAIL.sessions||[]).length}）</h3>${renderSessions()}</div>
         <div class="card"><h3>Git 提交（${(DETAIL.commits||[]).length}）</h3>${renderCommits()}</div>
@@ -334,6 +411,7 @@ function renderDetail(){
       <div class="card detail" id="detail"><div class="empty-inline">选择一个事件查看来源与证据</div></div>
     </div>`;
   renderTimelineOnly();
+  renderSegmentView();
   if(DETAIL.events.length)selectEvent(DETAIL.events[DETAIL.events.length-1].id);
 }
 function onFilterInput(){
@@ -368,7 +446,7 @@ function updateMore(){
     wrap.innerHTML=`<div class="empty-inline">已显示全部 ${DETAIL.total} 条</div>`;
   }else wrap.innerHTML='';
 }
-function resetFilter(){FILTER={q:'',type:'',evidence:'',agent:''};const a=$('f-agent');if(a)a.value='';applyServerFilter()}
+function resetFilter(){FILTER={q:'',type:'',evidence:'',agent:'',device:'',session:''};SEGVIEW=null;SEGMENTS=null;const a=$('f-agent');if(a)a.value='';applyServerFilter()}
 function selectEvent(id){
   if(!DETAIL)return;DETAIL.__sel=id;
   const e=(DETAIL.events||[]).find(x=>x.id===id);if(!e)return;
@@ -379,9 +457,9 @@ function selectEvent(id){
     <dt>类型</dt><dd>${esc(e.type)}</dd>
     <dt>证据</dt><dd><span class="chip ${esc(e.evidence)}">${esc(e.evidence)}</span></dd>
     <dt>发送者</dt><dd>${senderChip(e)}</dd>
-    <dt>Agent</dt><dd>${esc(e.agentName||e.agentId)}</dd>
-    <dt>设备</dt><dd><code>${esc(e.deviceId)}</code></dd>
-    ${e.sessionId?`<dt>会话</dt><dd><code>${esc(e.sessionId)}</code></dd>`:''}
+    <dt>Agent</dt><dd><button class="linkbtn" onclick="drillTo('agent',${jsarg(e.agentId||e.agentName)})" title="列出此 Agent 的所有会话片段">${esc(e.agentName||e.agentId)} ↗</button></dd>
+    <dt>设备</dt><dd><button class="linkbtn" onclick="drillTo('device',${jsarg(e.deviceId)})" title="列出此设备的所有会话片段"><code>${esc(e.deviceId)}</code> ↗</button></dd>
+    ${e.sessionId?`<dt>会话</dt><dd><button class="linkbtn" onclick="drillTo('session',${jsarg(e.sessionId)})" title="列出此会话的所有片段"><code>${esc(e.sessionId)}</code> ↗</button></dd>`:''}
     ${e.commit?`<dt>提交</dt><dd><code>${esc(e.commit)}</code></dd>`:''}
     <dt>来源类型</dt><dd>${esc(e.provenance?.sourceType)} / ${esc(e.provenance?.captureLevel)}</dd>
     ${e.provenance?.sourcePath?`<dt>来源文件</dt><dd><code>${esc(e.provenance.sourcePath)}</code></dd>`:''}
@@ -392,6 +470,33 @@ function selectEvent(id){
     ${e.contextRefs?.length?`<dt>上下文引用</dt><dd>${e.contextRefs.map(r=>`<code>${esc(r)}</code>`).join(' ')}</dd>`:''}
   </dl>${e.body?`<div class="body">${esc(e.body)}</div>`:''}`;
   renderTimelineOnly();
+}
+function renderDrillBar(){
+  const chips=[];
+  if(FILTER.agent)chips.push(`<span class="chip drill">Agent: ${esc(AGENTS.find(a=>a.id===FILTER.agent)?.name||FILTER.agent)} <b onclick="clearDimension('agent')" title="移除">×</b></span>`);
+  if(FILTER.device)chips.push(`<span class="chip drill">设备: ${esc(FILTER.device)} <b onclick="clearDimension('device')" title="移除">×</b></span>`);
+  if(FILTER.session)chips.push(`<span class="chip drill">会话: ${esc(FILTER.session)} <b onclick="clearDimension('session')" title="移除">×</b></span>`);
+  if(!chips.length)return'';
+  return `<div class="drill-bar"><span>聚焦：</span>${chips.join('')}<button class="btn ghost sm" onclick="resetSegments()">清除聚焦</button></div>`;
+}
+function renderSegmentView(){
+  const host=$('segment-view');if(!host)return;
+  const drill=$('drill-bar');if(drill)drill.innerHTML=renderDrillBar();
+  if(!SEGVIEW||!SEGMENTS){host.innerHTML='';return}
+  const label=SEGVIEW.field==='agent'?'Code Agent':SEGVIEW.field==='device'?'设备':'会话';
+  const rows=SEGMENTS.segments||[];
+  const segRows=rows.map((s,i)=>`<button class="seg" onclick="openSegment(${i})">
+    <div class="seg-h"><span class="chip agent">${esc(s.agentName||s.agentId)}</span><span class="chip">${esc(s.sessionId||'无会话ID')}</span><span class="chip ${esc(s.evidence)}">${esc(s.evidence)}</span></div>
+    <div class="seg-device"><code>${esc(s.deviceId)}</code></div>
+    <div class="seg-title">${esc(s.firstTitle||'(无正文)')}</div>
+    <div class="seg-meta"><span>${s.eventCount} 事件</span><span>${s.firstAt?fmtDay(s.firstAt):''} ${s.firstAt?new Date(s.firstAt).toLocaleTimeString('zh-CN',{hour12:false}):''} → ${s.lastAt?new Date(s.lastAt).toLocaleTimeString('zh-CN',{hour12:false}):''}</span></div>
+  </button>`).join('');
+  host.innerHTML=`<div class="card segcard">
+    <h3>会话片段 · 按 ${esc(label)} 聚合 <span class="seg-count">${SEGMENTS.total} 段</span></h3>
+    <div class="seg-note">每个片段 = 会话 ID + 设备 + Agent 的唯一组合，内部按时间排序。点击片段查看其完整时序。</div>
+    <div class="seg-list">${segRows||'<div class="empty-inline">无匹配片段</div>'}</div>
+    ${SEGMENTS.hasMore?`<button class="btn ghost sm" style="margin-top:10px;width:100%" onclick="loadMoreSegments()">加载更多片段（${rows.length} / ${SEGMENTS.total}）</button>`:''}
+  </div>`;
 }
 function renderSessions(){
   const rows=DETAIL.sessions||[];if(!rows.length)return'<div class="empty-inline">无匹配会话</div>';
