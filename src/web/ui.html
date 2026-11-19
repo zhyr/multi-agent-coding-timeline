@@ -12,9 +12,10 @@
     --shadow:0 1px 3px rgba(24,28,60,.06),0 6px 20px rgba(24,28,60,.04);
   }
   *{box-sizing:border-box}
-  body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:var(--text);background:var(--bg)}
-  .app{display:grid;grid-template-columns:340px 1fr;min-height:100vh}
-  aside{background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;height:100vh;position:sticky;top:0}
+  html,body{max-width:100%;overflow-x:hidden}
+  body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;color:var(--text);background:var(--bg);overflow-wrap:break-word;word-break:break-word}
+  .app{display:grid;grid-template-columns:minmax(240px,300px) minmax(0,1fr);min-height:100vh;max-width:100vw}
+  aside{background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;height:100vh;position:sticky;top:0;min-width:0;max-width:100%}
   .brand{padding:18px 20px 12px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
   .logo{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;display:grid;place-items:center;font-weight:700}
   .brand h1{font-size:15px;margin:0}
@@ -30,19 +31,19 @@
   .progress-wrap{margin-top:8px;display:none}
   .progress-bar{height:6px;background:var(--panel-2);border-radius:4px;overflow:hidden}
   .progress-bar>i{display:block;height:100%;width:0;background:var(--primary);transition:width .2s}
-  .progress-msg{font-size:11px;color:var(--muted);margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .progress-msg{font-size:11px;color:var(--muted);margin-top:5px;white-space:normal;overflow-wrap:anywhere}
   .list-head{padding:12px 16px 6px;display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--muted)}
   .repo-list{overflow:auto;padding:0 10px 16px;flex:1}
   .repo{display:block;width:100%;text-align:left;border:1px solid transparent;background:transparent;border-radius:10px;padding:11px 12px;margin-bottom:5px;cursor:pointer}
   .repo:hover{background:var(--panel-2)}
   .repo.active{border-color:#c7c9f5;background:#f0efff}
   .repo .name{font-weight:600;font-size:13px;display:flex;align-items:center;gap:6px}
-  .repo .path{font-size:11px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .repo .meta{font-size:11px;color:var(--muted);margin-top:5px;display:flex;gap:10px}
+  .repo .path{font-size:11px;color:var(--muted);margin-top:3px;white-space:normal;overflow-wrap:anywhere}
+  .repo .meta{font-size:11px;color:var(--muted);margin-top:5px;display:flex;gap:10px;flex-wrap:wrap}
   .dot{width:7px;height:7px;border-radius:50%;display:inline-block;background:#cbd0e0}
   .dot.scanned{background:var(--verified)}
   .tag{font-size:10px;padding:1px 6px;border-radius:5px;background:#eceefe;color:var(--primary);font-weight:600}
-  main{height:100vh;overflow:auto;padding:22px 26px}
+  main{height:100vh;overflow:auto;padding:22px clamp(12px,2.2vw,26px);min-width:0;max-width:100%}
   .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;gap:12px;flex-wrap:wrap}
   .topbar h2{margin:0;font-size:20px}
   .topbar .crumb{font-size:12px;color:var(--muted);margin-top:3px}
@@ -54,33 +55,65 @@
   .kpi span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
   .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;align-items:center}
   .toolbar input,.toolbar select{padding:7px 9px;border:1px solid var(--border);border-radius:7px;font-size:12px;background:#fff}
-  .toolbar input[type=search]{min-width:220px}
-  .card{background:var(--panel);border:1px solid var(--border);border-radius:11px;padding:16px;margin-bottom:16px;box-shadow:var(--shadow)}
+  .toolbar input[type=search]{min-width:160px;flex:1 1 200px}
+  .toolbar select{max-width:100%;min-width:0}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:11px;padding:clamp(12px,1.6vw,16px);margin-bottom:16px;box-shadow:var(--shadow);min-width:0;max-width:100%}
   .card h3{margin:0 0 12px;font-size:14px}
-  .layout{display:grid;grid-template-columns:1fr 360px;gap:16px;align-items:start}
+  .layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,340px);gap:16px;align-items:start}
   .event{border-bottom:1px solid var(--border);padding:10px 8px;cursor:pointer;border-radius:6px}
   .event:hover{background:var(--panel-2)}
   .event.active{background:#f0efff}
-  .event .t{font-size:11px;color:var(--muted);display:flex;gap:8px}
-  .event .title{font-size:13px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .chip{font-size:10px;padding:1px 7px;border-radius:10px;background:var(--panel-2);color:var(--muted);margin-right:4px;white-space:nowrap}
+  .event .t{font-size:11px;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap}
+  .event .title{font-size:13px;margin-top:3px;white-space:normal;overflow-wrap:anywhere;word-break:break-word}
+  .event>div:last-child{display:flex;flex-wrap:wrap;gap:3px}
+  .chip{font-size:10px;padding:1px 7px;border-radius:10px;background:var(--panel-2);color:var(--muted);white-space:normal;overflow-wrap:anywhere;display:inline-block}
+  .chip.agent{background:#e8e7fe;color:#4f46e5;font-weight:600}
+  .chip.sender-user{background:#fde8ef;color:#c2185b;font-weight:600}
+  .chip.sender-agent{background:#e8e7fe;color:#4f46e5;font-weight:600}
+  .chip.sender-subagent{background:#fff0d9;color:#b45309;font-weight:600}
+  .chip.sender-source{background:#e8f0fe;color:#1d4ed8;font-weight:600}
   .chip.verified{background:#e6f5ee;color:var(--verified)}
   .chip.agent_reported{background:#f1eafe;color:var(--agent)}
   .chip.inferred{background:#fdf0dc;color:var(--inferred)}
   .day{font-size:11px;color:var(--muted);font-weight:600;padding:10px 8px 4px;text-transform:uppercase;letter-spacing:.04em}
-  table{width:100%;border-collapse:collapse;font-size:12px}
-  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:top}
+  .card>table,.card>div{overflow-wrap:anywhere}
+  .card>:is(table,div){max-width:100%}
+  .table-wrap{width:100%;overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:12px;table-layout:auto}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:top;overflow-wrap:anywhere;word-break:break-word}
   th{color:var(--muted);font-weight:600;font-size:11px}
-  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;background:var(--panel-2);padding:1px 4px;border-radius:4px;word-break:break-all}
-  .detail{position:sticky;top:22px}
-  .detail dl{display:grid;grid-template-columns:100px 1fr;gap:6px 10px;font-size:12px;margin:0}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;background:var(--panel-2);padding:1px 4px;border-radius:4px;word-break:break-all;overflow-wrap:anywhere}
+  .detail{position:sticky;top:22px;min-width:0;max-width:100%}
+  .detail dl{display:grid;grid-template-columns:minmax(64px,88px) minmax(0,1fr);gap:6px 10px;font-size:12px;margin:0}
   .detail dt{color:var(--muted)}
   .detail dd{margin:0;word-break:break-word}
   .detail .body{white-space:pre-wrap;background:var(--panel-2);border-radius:8px;padding:10px;margin-top:10px;font-size:12px;max-height:300px;overflow:auto}
   .warn{background:#fff8e6;border:1px solid #f5dfa0;color:#8a6400;padding:8px 12px;border-radius:8px;font-size:12px;margin-bottom:12px}
   .empty-inline{color:var(--muted);font-size:12px;padding:14px;text-align:center}
   .badge-synth{font-size:10px;background:#fee;color:#b00;padding:2px 6px;border-radius:4px}
-  @media(max-width:1000px){.app{grid-template-columns:1fr}aside{height:auto;position:static}.layout{grid-template-columns:1fr}.detail{position:static}}
+  /* Responsive breakpoints: sidebars collapse, grids become single-column, nothing overflows. */
+  @media(max-width:1200px){
+    .app{grid-template-columns:minmax(200px,240px) minmax(0,1fr)}
+    .layout{grid-template-columns:minmax(0,1fr)}
+    .detail{position:static}
+  }
+  @media(max-width:900px){
+    .app{grid-template-columns:1fr}
+    aside{height:auto;position:static;border-right:0;border-bottom:1px solid var(--border)}
+    .repo-list{max-height:320px}
+    main{height:auto;min-height:60vh}
+    .topbar{gap:8px}
+  }
+  @media(max-width:600px){
+    main{padding:14px 10px}
+    .kpis{grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px}
+    .kpi{padding:10px 12px}
+    .kpi b{font-size:19px}
+    .toolbar input[type=search]{flex:1 1 100%;min-width:0}
+    .detail dl{grid-template-columns:1fr;gap:2px 0}
+    .detail dt{margin-top:6px}
+    .brand{padding:12px 14px}
+  }
 </style>
 </head>
 <body>
@@ -109,7 +142,11 @@
   <main>
     <div class="topbar">
       <div><h2 id="page-title">项目总览</h2><div class="crumb" id="crumb">从左侧选择一个项目查看活动聚簇</div></div>
-      <button class="btn ghost sm" id="btn-rescan" onclick="rescanCurrent()" style="display:none">⟳ 增量扫描此项目</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn ghost sm" id="btn-export" onclick="exportProject('jsonl')" style="display:none" title="导出事件为 JSONL">⬇ 导出 JSONL</button>
+        <button class="btn ghost sm" id="btn-export-zip" onclick="exportProject('zip')" style="display:none" title="导出完整 Timeline 包为 ZIP">⬇ 导出 ZIP</button>
+        <button class="btn ghost sm" id="btn-rescan" onclick="rescanCurrent()" style="display:none">⟳ 增量扫描此项目</button>
+      </div>
     </div>
     <div id="content">
       <div class="empty"><div class="em">◷</div><div>扫描仓库后，选择项目查看多 Agent 活动聚簇时间线</div></div>
@@ -120,11 +157,20 @@
 let CONFIG={roots:[],contentMode:'summary'};
 let CATALOG={repositories:[]};
 let CURRENT=null;       // current RepositoryEntry
-let DETAIL=null;        // ViewerModel
-let FILTER={q:'',type:'',evidence:''};
+let DETAIL=null;        // current DetailPage (paged)
+let FILTER={q:'',type:'',evidence:'',agent:''};
+let PAGE_LIMIT=200;
+let TYPES=[];           // event types from server
+let AGENTS=[];          // {id,name} code agents present in events
+let FILTER_TIMER=null;
 
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const senderChip=e=>{
+  const s=e.sender||{kind:'source',label:e.agentName||'系统',detail:e.agentName};
+  const text=s.kind==='subagent'?(s.detail||s.label):(s.detail&&s.detail!==s.label?s.detail:s.label);
+  return `<span class="chip sender-${esc(s.kind)}" title="${esc(s.label)}">${esc(text||s.label)}</span>`;
+};
 const fmtTime=iso=>{if(!iso)return '-';const d=new Date(iso);return isNaN(d)?iso:d.toLocaleString('zh-CN',{hour12:false})};
 const fmtDay=iso=>{if(!iso)return '';const d=new Date(iso);return isNaN(d)?iso:d.toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'})};
 
@@ -192,6 +238,8 @@ async function selectRepo(id){
   $('page-title').textContent=r.name;
   $('crumb').textContent=r.path+(r.latestCommitAt?' · 最近提交 '+fmtTime(r.latestCommitAt):'');
   $('btn-rescan').style.display='inline-flex';
+  $('btn-export').style.display='inline-flex';
+  $('btn-export-zip').style.display='inline-flex';
   if(r.scanned && await hasPackage(id)){await loadDetail(id)}
   else{await scanProject(id)}
 }
@@ -209,27 +257,48 @@ async function scanProject(id){
   }catch(e){$('content').innerHTML='<div class="empty"><div class="em">⚠️</div><div>扫描失败: '+esc(e.message)+'</div></div>'}
 }
 async function rescanCurrent(){if(CURRENT)await scanProject(CURRENT.id)}
-async function loadDetail(id){
-  const d=await (await fetch('/api/project/'+id+'/detail')).json();
-  if(d.error){$('content').innerHTML='<div class="warn">'+esc(d.error)+'</div>';return}
-  DETAIL=d;FILTER={q:'',type:'',evidence:''};renderDetail();
+function exportProject(fmt){
+  if(!CURRENT)return;
+  const url='/api/project/'+encodeURIComponent(CURRENT.id)+'/export?format='+fmt;
+  // Trigger a browser download; the server streams with Content-Disposition: attachment.
+  const a=document.createElement('a');a.href=url;a.download='';document.body.appendChild(a);a.click();a.remove();
 }
-function visibleEvents(){
-  if(!DETAIL)return[];
-  const q=FILTER.q.toLowerCase();
-  return (DETAIL.events||[]).filter(e=>{
-    if(FILTER.type&&e.type!==FILTER.type)return false;
-    if(FILTER.evidence&&e.evidence!==FILTER.evidence)return false;
-    if(q){const hay=[e.title,e.body,e.type,e.agentName,e.commit,e.branch,e.provenance?.sourcePath,(e.files||[]).join(' ')].join(' ').toLowerCase();if(!hay.includes(q))return false}
-    return true;
-  });
+async function loadDetail(id){
+  $('content').innerHTML='<div class="empty"><div class="em">⏳</div><div>正在载入项目详情…</div></div>';
+  FILTER={q:'',type:'',evidence:'',agent:''};
+  DETAIL=await fetchDetailPage(0);
+  if(!DETAIL||DETAIL.error){$('content').innerHTML='<div class="warn">'+esc(DETAIL?.error||'载入失败')+'</div>';return}
+  TYPES=DETAIL.types||[];
+  AGENTS=DETAIL.agentOptions||[];
+  renderDetail();
+}
+async function fetchDetailPage(offset){
+  if(!CURRENT)return null;
+  const p=new URLSearchParams({q:FILTER.q,type:FILTER.type,evidence:FILTER.evidence,agent:FILTER.agent,offset:String(offset),limit:String(PAGE_LIMIT)});
+  const res=await fetch('/api/project/'+encodeURIComponent(CURRENT.id)+'/detail?'+p);
+  return await res.json();
+}
+async function applyServerFilter(){
+  // Debounced server-side filtering: refetch first page with current filters.
+  DETAIL=await fetchDetailPage(0);
+  if(!DETAIL||DETAIL.error)return;
+  renderTimelineOnly();
+  const shown=$('shown');if(shown)shown.textContent=DETAIL.total;
+  const cnt=$('filter-count');if(cnt)cnt.textContent=DETAIL.total;
+}
+async function loadMoreEvents(){
+  if(!DETAIL||!DETAIL.hasMore)return;
+  const next=await fetchDetailPage(DETAIL.offset+DETAIL.events.length);
+  if(!next||next.error)return;
+  DETAIL.events=DETAIL.events.concat(next.events);
+  DETAIL.offset=next.offset;
+  DETAIL.hasMore=next.hasMore;
+  renderTimelineOnly();
 }
 function renderDetail(){
   if(!DETAIL)return;
   const m=DETAIL.meta,c=m.counts;
-  const types=[...new Set((DETAIL.events||[]).map(e=>e.type))].sort();
-  const opts=types.map(t=>`<option value="${esc(t)}" ${FILTER.type===t?'selected':''}>${esc(t)}</option>`).join('');
-  const vis=visibleEvents();
+  const opts=(TYPES||[]).map(t=>`<option value="${esc(t)}" ${FILTER.type===t?'selected':''}>${esc(t)}</option>`).join('');
   $('content').innerHTML=`
     ${m.identityStrong?'':('<div class="warn">项目身份为弱证据（'+esc(m.identityBasis)+'），活动归属需人工确认。</div>')}
     <div class="kpis">
@@ -241,40 +310,57 @@ function renderDetail(){
       <div class="kpi"><b>${c.devices}</b><span>设备</span></div>
     </div>
     <div class="toolbar">
-      <input id="f-q" type="search" placeholder="搜索事件、提交、来源…" value="${esc(FILTER.q)}" oninput="FILTER.q=this.value;renderTimelineOnly()">
-      <select id="f-type" onchange="FILTER.type=this.value;renderTimelineOnly()"><option value="">所有事件类型</option>${opts}</select>
-      <select id="f-evidence" onchange="FILTER.evidence=this.value;renderTimelineOnly()"><option value="">所有证据等级</option>${['verified','agent_reported','inferred','unknown'].map(x=>`<option ${FILTER.evidence===x?'selected':''}>${x}</option>`).join('')}</select>
-      <span style="font-size:12px;color:var(--muted)">显示 <b id="shown">${vis.length}</b> / ${c.events}</span>
+      <input id="f-q" type="search" placeholder="搜索事件、提交、来源…" value="${esc(FILTER.q)}" oninput="onFilterInput()">
+      <select id="f-agent" onchange="FILTER.agent=this.value;applyServerFilter()"><option value="">所有 Code Agent</option>${(AGENTS||[]).map(a=>`<option value="${esc(a.id)}" ${FILTER.agent===a.id?'selected':''}>${esc(a.name)}</option>`).join('')}</select>
+      <select id="f-type" onchange="FILTER.type=this.value;applyServerFilter()"><option value="">所有事件类型</option>${opts}</select>
+      <select id="f-evidence" onchange="FILTER.evidence=this.value;applyServerFilter()"><option value="">所有证据等级</option>${['verified','agent_reported','inferred','unknown'].map(x=>`<option ${FILTER.evidence===x?'selected':''}>${x}</option>`).join('')}</select>
+      <span style="font-size:12px;color:var(--muted)">匹配 <b id="shown">${DETAIL.total}</b> / ${c.events}</span>
       <button class="btn ghost sm" onclick="resetFilter()">重置</button>
     </div>
     <div class="layout">
       <div>
-        <div class="card"><h3>统一时间线</h3><div id="timeline"></div></div>
+        <div class="card"><h3>统一时间线</h3><div id="timeline"></div><div id="more-wrap"></div></div>
         <div class="card"><h3>会话（${(DETAIL.sessions||[]).length}）</h3>${renderSessions()}</div>
         <div class="card"><h3>Git 提交（${(DETAIL.commits||[]).length}）</h3>${renderCommits()}</div>
       </div>
       <div class="card detail" id="detail"><div class="empty-inline">选择一个事件查看来源与证据</div></div>
     </div>`;
   renderTimelineOnly();
-  if(vis.length)selectEvent(vis[vis.length-1].id);
+  if(DETAIL.events.length)selectEvent(DETAIL.events[DETAIL.events.length-1].id);
+}
+function onFilterInput(){
+  FILTER.q=document.getElementById('f-q').value;
+  clearTimeout(FILTER_TIMER);
+  FILTER_TIMER=setTimeout(applyServerFilter,300);
 }
 function renderTimelineOnly(){
-  const vis=visibleEvents();
-  const shown=$('shown');if(shown)shown.textContent=vis.length;
+  const vis=DETAIL?DETAIL.events:[];
   const host=$('timeline');if(!host)return;
-  if(!vis.length){host.innerHTML='<div class="empty-inline">没有匹配的事件</div>';return}
+  if(!vis.length){host.innerHTML='<div class="empty-inline">没有匹配的事件</div>';updateMore();return}
+  // Cap DOM nodes even within a page to guarantee responsiveness.
+  const cap=Math.min(vis.length,500);
   let day='';let html='';
-  for(const e of vis){
+  for(let i=0;i<cap;i++){
+    const e=vis[i];
     const d=fmtDay(e.at);if(d!==day){day=d;html+=`<div class="day">${esc(d)}</div>`}
     html+=`<div class="event ${DETAIL&&DETAIL.__sel===e.id?'active':''}" onclick="selectEvent('${esc(e.id)}')">
       <div class="t"><span>${e.at?new Date(e.at).toLocaleTimeString('zh-CN',{hour12:false}):''}</span></div>
       <div class="title">${esc(e.title||e.type)}</div>
-      <div><span class="chip">${esc(e.type)}</span><span class="chip ${esc(e.evidence)}">${esc(e.evidence)}</span>${e.commit?`<span class="chip verified">commit ${esc(String(e.commit).slice(0,10))}</span>`:''}</div>
+      <div>${senderChip(e)}<span class="chip">${esc(e.type)}</span><span class="chip ${esc(e.evidence)}">${esc(e.evidence)}</span>${e.sessionId?`<span class="chip" title="session / trace">${esc(e.sessionId).slice(0,16)}</span>`:''}${e.commit?`<span class="chip verified">commit ${esc(String(e.commit).slice(0,10))}</span>`:''}</div>
     </div>`;
   }
   host.innerHTML=html;
+  updateMore();
 }
-function resetFilter(){FILTER={q:'',type:'',evidence:''};renderDetail()}
+function updateMore(){
+  const wrap=$('more-wrap');if(!wrap)return;
+  if(DETAIL&&DETAIL.hasMore){
+    wrap.innerHTML=`<button class="btn ghost sm" style="margin-top:10px;width:100%" onclick="loadMoreEvents()">加载更多（已显示 ${DETAIL.events.length} / ${DETAIL.total}）</button>`;
+  }else if(DETAIL&&DETAIL.events.length){
+    wrap.innerHTML=`<div class="empty-inline">已显示全部 ${DETAIL.total} 条</div>`;
+  }else wrap.innerHTML='';
+}
+function resetFilter(){FILTER={q:'',type:'',evidence:'',agent:''};const a=$('f-agent');if(a)a.value='';applyServerFilter()}
 function selectEvent(id){
   if(!DETAIL)return;DETAIL.__sel=id;
   const e=(DETAIL.events||[]).find(x=>x.id===id);if(!e)return;
@@ -284,6 +370,7 @@ function selectEvent(id){
     <dt>时间</dt><dd>${esc(e.at)} <span class="chip">${esc(e.sortBasis)}</span></dd>
     <dt>类型</dt><dd>${esc(e.type)}</dd>
     <dt>证据</dt><dd><span class="chip ${esc(e.evidence)}">${esc(e.evidence)}</span></dd>
+    <dt>发送者</dt><dd>${senderChip(e)}</dd>
     <dt>Agent</dt><dd>${esc(e.agentName||e.agentId)}</dd>
     <dt>设备</dt><dd><code>${esc(e.deviceId)}</code></dd>
     ${e.sessionId?`<dt>会话</dt><dd><code>${esc(e.sessionId)}</code></dd>`:''}
@@ -299,7 +386,7 @@ function renderSessions(){
   return `<table><thead><tr><th>最近活动</th><th>Agent</th><th>设备</th><th>事件</th><th>匹配</th><th>来源</th></tr></thead><tbody>${rows.map(s=>`<tr>
     <td>${s.lastSeen?fmtTime(s.lastSeen):'-'}</td><td>${esc(s.agent)}</td><td><code>${esc(s.device).slice(0,12)}</code></td>
     <td>${s.eventCount}</td><td><span class="chip ${s.matchConfidence==='exact'||s.matchConfidence==='strong'?'verified':'inferred'}">${esc(s.matchConfidence)}</span></td>
-    <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><code>${esc(s.source)}</code></td></tr>`).join('')}</tbody></table>`;
+    <td style="max-width:280px;overflow-wrap:anywhere"><code>${esc(s.source)}</code></td></tr>`).join('')}</tbody></table>`;
 }
 function renderCommits(){
   const rows=DETAIL.commits||[];if(!rows.length)return'<div class="empty-inline">无 Git 提交</div>';

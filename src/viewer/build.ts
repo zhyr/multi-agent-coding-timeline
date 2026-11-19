@@ -35,6 +35,13 @@ export interface ViewerEvent {
     sourceHash?: string;
   };
   parser: { adapterId: string; adapterVersion: string; parserVersion: string };
+  /** Who produced this message/event: user, the main agent, a subagent, or a non-chat source. */
+  sender: {
+    kind: 'user' | 'agent' | 'subagent' | 'source';
+    label: string;
+    agentName?: string;
+    detail?: string;
+  };
   redactionKinds?: string[];
   sequence?: number;
 }
@@ -169,6 +176,56 @@ function eventBody(event: ActivityEvent, allowContent: boolean): string | undefi
   return content.length <= BODY_LIMIT ? content : `${content.slice(0, BODY_LIMIT)}\n… (truncated in viewer)`;
 }
 
+/** Extract a readable subagent name from a native session id or source path. */
+function subagentName(event: ActivityEvent): string | undefined {
+  const native = event.agent?.native_session_id;
+  const candidates: string[] = [];
+  if (native && /subagent|agent-/i.test(native)) candidates.push(native);
+  const p = event.provenance?.source_path;
+  if (p && /\/subagents\//i.test(p)) {
+    const tail = p.split('/').pop() ?? '';
+    candidates.push(tail.replace(/\.jsonl(?:\.zst)?$/i, ''));
+  }
+  for (const raw of candidates) {
+    // e.g. "agent-a【示例】研究助手-462a2edd90c83e7f" -> "agent-a【示例】研究助手"
+    const cleaned = raw
+      .replace(/-[0-9a-f]{8,}$/i, '')
+      .replace(/^[0-9a-f-]{36}$/i, '')
+      .trim();
+    if (cleaned && !/^[0-9a-f-]+$/i.test(cleaned)) return cleaned;
+  }
+  return undefined;
+}
+
+/** Derive who sent/produced an event. Never upgrades evidence; purely interpretive labels. */
+function eventSender(event: ActivityEvent, agentName: string): ViewerEvent['sender'] {
+  const role = (event.activity?.role ?? '').toLowerCase();
+  const agent = event.agent?.agent_id ?? '';
+  const isGit = event.event_type.startsWith('git.') || (!event.agent && !event.activity?.role);
+
+  if (role === 'user') {
+    return { kind: 'user', label: '用户', detail: agentName !== 'Git' ? `→ ${agentName}` : undefined };
+  }
+  const isSubagent = /\/subagents\//i.test(event.provenance?.source_path ?? '') ||
+    /subagent/i.test(event.agent?.native_session_id ?? '');
+  if (isSubagent) {
+    const name = subagentName(event);
+    return {
+      kind: 'subagent',
+      label: '子代理',
+      agentName,
+      detail: name ? `${agentName} · ${name}` : agentName,
+    };
+  }
+  if (role === 'assistant') {
+    return { kind: 'agent', label: 'Agent', agentName, detail: agentName };
+  }
+  if (isGit || agent === 'git') {
+    return { kind: 'source', label: 'Git', detail: '版本控制' };
+  }
+  return { kind: 'source', label: agentName || '系统', detail: role || undefined };
+}
+
 /** Build the render model. Never upgrades evidence levels or invents fields. */
 export function buildViewerModel(data: TimelineData, options: ViewerOptions = {}): ViewerModel {
   const manifest = data.manifest;
@@ -184,6 +241,10 @@ export function buildViewerModel(data: TimelineData, options: ViewerOptions = {}
       type: event.event_type,
       agentId: event.agent?.agent_id ?? 'git',
       agentName: event.agent?.agent_name ?? agentNames.get(event.agent?.agent_id ?? '') ?? 'Git',
+      sender: eventSender(
+        event,
+        event.agent?.agent_name ?? agentNames.get(event.agent?.agent_id ?? '') ?? 'Git',
+      ),
       deviceId: event.scanner_device_id
         ? `${event.device_id} (scanner ${event.scanner_device_id})`
         : event.device_id,

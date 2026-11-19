@@ -9,12 +9,14 @@ import http from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createReadStream } from 'node:fs';
+import { unlink } from 'node:fs/promises';
+import { runScan } from '../scan/engine.js';
+import { loadViewerModel, buildDetailPage, eventTypes, agentOptions } from './detail.js';
+import { exportJsonl, exportZip, lineAllowed, type ExportFormat } from './export.js';
+
 /** Web app version (kept local to avoid a circular import with the CLI layer). */
 const WEB_VERSION = '1.0.0';
-import { runScan } from '../scan/engine.js';
-import { readPackage } from '../package/reader.js';
-import { buildViewerModel } from '../viewer/build.js';
-import { sanitizeViewerModel } from './sanitize.js';
 import { discoverRepositories, repoIdFromPath, defaultScanRoots, type RepositoryEntry } from './discovery.js';
 import {
   defaultDataDir, loadConfig, saveConfig, loadCatalog, saveDiscoveredRepositories,
@@ -244,16 +246,88 @@ export async function startServer(options: ServeOptions = {}): Promise<RunningSe
       const detail = pathname.match(/^\/api\/project\/([^/]+)\/detail$/);
       if (req.method === 'GET' && detail) {
         const projectId = detail[1];
-        const out = projectOutputDir(dataDir, projectId);
         if (!await hasPackage(dataDir, projectId)) {
           respond(res, 404, { error: 'project not scanned yet' }); return;
         }
-        const result = await readPackage(out);
-        if (!result.data) {
-          respond(res, 422, { error: 'package unreadable', issues: result.issues?.map((i) => i.reason) });
+        const loaded = await loadViewerModel(dataDir, projectId);
+        if (!loaded) {
+          respond(res, 422, { error: 'package unreadable or empty' }); return;
+        }
+        const num = (v: string | null, fallback: number) => {
+          const n = v == null ? NaN : Number(v);
+          return Number.isFinite(n) ? n : fallback;
+        };
+        const page = buildDetailPage(loaded, {
+          q: url.searchParams.get('q') ?? '',
+          type: url.searchParams.get('type') ?? '',
+          evidence: url.searchParams.get('evidence') ?? '',
+          agent: url.searchParams.get('agent') ?? '',
+          offset: num(url.searchParams.get('offset'), 0),
+          limit: num(url.searchParams.get('limit'), 200),
+        });
+        respond(res, 200, {
+          ...page,
+          types: eventTypes(loaded),
+          agentOptions: agentOptions(loaded),
+        }); return;
+      }
+
+      const exportMatch = pathname.match(/^\/api\/project\/([^/]+)\/export$/);
+      if (req.method === 'GET' && exportMatch) {
+        const projectId = exportMatch[1];
+        const fmt = (url.searchParams.get('format') ?? 'jsonl') as ExportFormat;
+        if (fmt !== 'jsonl' && fmt !== 'zip') {
+          respond(res, 400, { error: 'format must be jsonl or zip' }); return;
+        }
+        if (!await hasPackage(dataDir, projectId)) {
+          respond(res, 404, { error: 'project not scanned yet' }); return;
+        }
+        if (fmt === 'jsonl') {
+          const exported = await exportJsonl(dataDir, projectId);
+          if (!exported) { respond(res, 404, { error: 'events not found' }); return; }
+          res.writeHead(200, {
+            'Content-Type': 'application/x-ndjson; charset=utf-8',
+            'Content-Disposition': `attachment; filename="${exported.filename}"`,
+            'Cache-Control': 'no-store',
+          });
+          // Stream line-by-line, dropping blocked-token lines; do not buffer 280MB in memory.
+          let carry = '';
+          const source = exported.stream;
+          source.on('data', (chunk: Buffer | string) => {
+            carry += chunk.toString();
+            const parts = carry.split('\n');
+            carry = parts.pop() ?? '';
+            for (const line of parts) {
+              if (lineAllowed(line)) res.write(line + '\n');
+            }
+          });
+          source.on('end', () => {
+            if (carry && lineAllowed(carry)) res.write(carry + '\n');
+            res.end();
+          });
+          source.on('error', () => { if (!res.writableEnded) res.end(); });
           return;
         }
-        respond(res, 200, sanitizeViewerModel(buildViewerModel(result.data))); return;
+        // zip
+        try {
+          const exported = await exportZip(dataDir, projectId);
+          if (!exported) { respond(res, 404, { error: 'package not found' }); return; }
+          const { size } = await import('node:fs/promises').then((fs) => fs.stat(exported.file));
+          res.writeHead(200, {
+            'Content-Type': 'application/zip',
+            'Content-Disposition': `attachment; filename="${exported.filename}"`,
+            'Content-Length': size,
+            'Cache-Control': 'no-store',
+          });
+          const stream = createReadStream(exported.file);
+          stream.pipe(res);
+          const cleanup = () => { void unlink(exported.file).catch(() => {}); };
+          res.on('close', cleanup);
+          stream.on('error', () => { if (!res.writableEnded) res.end(); });
+        } catch (error) {
+          respond(res, 500, { error: 'zip export failed: ' + (error instanceof Error ? error.message : String(error)) });
+        }
+        return;
       }
 
       respond(res, 404, { error: 'not found' });

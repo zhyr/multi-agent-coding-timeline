@@ -166,3 +166,63 @@ describe('viewer', () => {
     expect(html).toContain('&lt;/title&gt;');
   });
 });
+
+describe('viewer sender attribution', () => {
+  const agent = {
+    agent_id: 'codex',
+    agent_name: 'OpenAI Codex',
+    adapter_version: '1.0.0',
+    verification: 'verified' as const,
+    capabilities: {},
+  };
+
+  function modelOf(event: ReturnType<typeof makeEvent>) {
+    return buildViewerModel(makeTimelineData({ events: [event], agents: [agent] }));
+  }
+
+  it('labels a user-role event as 用户', () => {
+    const m = modelOf(makeEvent({ activity: { role: 'user', content_summary: 'hi' }, agent: { ...agent } }));
+    expect(m.events[0].sender.kind).toBe('user');
+    expect(m.events[0].sender.label).toBe('用户');
+  });
+
+  it('labels a normal assistant event as the agent', () => {
+    const m = modelOf(makeEvent({
+      event_type: 'agent.response.received',
+      activity: { role: 'assistant', content_summary: 'ok' },
+      agent: { ...agent },
+    }));
+    expect(m.events[0].sender.kind).toBe('agent');
+    expect(m.events[0].sender.agentName).toBe('OpenAI Codex');
+  });
+
+  it('labels a /subagents/ source as 子代理 with a readable name', () => {
+    const m = modelOf(makeEvent({
+      event_type: 'agent.response.received',
+      activity: { role: 'assistant', content_summary: 'sub' },
+      agent: { ...agent, native_session_id: 'agent-a【示例】研究助手-462a2edd90c83e7f' },
+      provenance: {
+        source_type: 'agent-session',
+        source_path: '~/.cursor/projects/forge/abc/subagents/agent-a【示例】研究助手-462a2edd90c83e7f.jsonl',
+        source_path_identity: 'cursor/sub.jsonl',
+        capture_method: 'adapter:cursor',
+        capture_level: 'observed',
+      },
+    }));
+    expect(m.events[0].sender.kind).toBe('subagent');
+    expect(m.events[0].sender.label).toBe('子代理');
+    expect(m.events[0].sender.detail).toContain('研究助手');
+  });
+
+  it('labels a git event as Git source', () => {
+    const m = modelOf(makeEvent({
+      event_type: 'git.commit.created',
+      git: { commit_sha: 'a'.repeat(40) },
+      // no agent, no activity role
+      agent: undefined,
+      activity: undefined,
+    }));
+    expect(m.events[0].sender.kind).toBe('source');
+    expect(m.events[0].sender.label).toBe('Git');
+  });
+});

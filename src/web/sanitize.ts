@@ -12,7 +12,7 @@ import type { ViewerModel } from '../viewer/build.js';
 /** Path tokens that must never appear in the interactive app's UI. */
 export const BLOCKED_PATH_TOKENS: readonly string[] = ['yuelideck'];
 
-function mentionsBlocked(value: unknown): boolean {
+export function mentionsBlocked(value: unknown): boolean {
   if (value == null) return false;
   const text = JSON.stringify(value).toLowerCase();
   return BLOCKED_PATH_TOKENS.some((token) => text.includes(token.toLowerCase()));
