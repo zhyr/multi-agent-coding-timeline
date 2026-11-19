@@ -29,7 +29,8 @@
     "dist",
     "scripts",
     "README.md",
-    "docs"
+    "LICENSE",
+    "docs/*.md"
   ],
   "engines": {
     "node": ">=22.5.0"

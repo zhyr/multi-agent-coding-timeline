@@ -1,5 +1,7 @@
 # aitimeline — Multi-Agent Coding Activity Timeline
 
+**Version 1.0.0** · MIT License
+
 [English](#english) · [中文](#中文)
 
 `aitimeline` is a local-first, read-only CLI that reconstructs a unified, verifiable
@@ -7,6 +9,53 @@ development timeline for one project across AI coding agents, devices and Git hi
 It ships as `@zhyr/ai-coding-timeline` and installs the `aitimeline` executable.
 
 Source: <https://github.com/zhyr/multi-agent-coding-timeline>
+
+---
+
+## 界面预览 / Demo
+
+The screenshots below follow the actual usage flow: discover repositories → scan a
+project → read the unified timeline → drill down into conversation segments.
+以下截图按实际使用动线排列：发现仓库 → 扫描项目 → 查看统一时间线 → 下钻会话片段。
+
+**1. 发现并选择仓库 / Discover and select repositories**
+
+左侧输入关键词过滤仓库名，点击「扫描仓库」按最近 commit 时间倒序列出本机项目；
+正文留存模式（摘要 / 完整 / 仅元数据）也可在此选择。默认不会自动扫描任何数据。
+
+![仓库发现与关键词过滤](docs/demo/iShot_2026-11-19_10.39.35.png)
+
+*Filter repositories by keyword, order by latest commit time, and choose the content mode.*
+
+**2. 扫描选中项目 / Scan the selected project**
+
+在界面上选择项目后触发扫描（或「增量扫描此项目」）；扫描只读本地 Agent 数据源，
+进度与发现的数据源数量会实时显示，结果落盘到本地目录供后续增量复用。
+
+![按需扫描项目](docs/demo/iShot_2026-11-19_10.43.19.png)
+
+*Scanning is manual and read-only; packages are stored locally for incremental reuse.*
+
+**3. 统一时间线与事件证据 / Unified timeline and event evidence**
+
+同一项目的事件按时间重排，标注发送者、证据等级与 Agent；右侧详情面板展示来源文件、
+设备、会话 ID、工具调用与正文。Agent / 设备 / 会话三个字段均可点击。
+
+![统一时间线与事件详情](docs/demo/iShot_2026-11-19_10.42.55.png)
+
+*Chronological events with sender, evidence level and a per-event provenance panel.*
+
+**4. 会话片段聚合 / Conversation segments**
+
+顶部 KPI 汇总事件、会话、Agent、提交与推送；点击 Agent / 设备 / 会话字段后，
+按 `(sessionID, device, agent)` 三元组聚合成会话片段时序列表，可继续下钻到单个会话。
+
+![会话片段聚合与三字段下钻](docs/demo/iShot_2026-11-19_10.43.08.png)
+
+*Segments aggregated by (session, device, agent), ordered by time and drillable.*
+
+> 截图来自本地实例 `aitimeline serve`。命令行模式见下文，交互式应用的设计见
+> [交互式扫描应用方案](docs/交互式扫描应用方案.md) 与 [中文使用指南](docs/使用指南-中文.md)。
 
 ---
 
@@ -22,6 +71,34 @@ Source: <https://github.com/zhyr/multi-agent-coding-timeline>
 Everything is a snapshot produced by a manual command. There is no hook installation,
 no background daemon, no watcher and no network access. Source records and Git
 repositories are only ever read.
+
+## Relationship with AI Exporter
+
+This project is a **downstream application** of
+[AI Exporter (`zhyr/Al-exporter`)](https://github.com/zhyr/Al-exporter), and the two are
+complementary rather than competing:
+
+| | AI Exporter (upstream) | aitimeline (this project, downstream) |
+| --- | --- | --- |
+| Role | Extracts and exports AI coding conversations from 26+ agents into a portable archive (`manifest.json`, per-thread JSON/Markdown, `interop.json`). | Reconstructs one project's activity into a unified, verifiable timeline and clusters it by project. |
+| Primary question | "What did the agent and I say? Give me a portable copy / training data." | "What happened on this project, in what order, on which device, backed by what evidence?" |
+| Output | Export archive, Markdown, JSON, training/eval formats (Transfer2Eval). | Timeline Package with evidence levels, provenance, SHA-256 integrity, offline viewer. |
+| Identity | `thread_id`, `session.native_id`, `messages[].id`, `device.source_device_id`. | `dedup_key` + `content_hash` + provenance; `source_device_id` / `scanner_device_id` are separated. |
+
+An AI Exporter archive is a supported **input source**: the built-in `al-exporter`
+import adapter reads it in Mode B (`--source-root` + `manifest.json`, schema 1.0.0 / 1.1.0),
+adopts the declared source device, and folds imported messages into native events at two
+explicit levels (`deterministic` and `inferred`). Imported events are always
+`agent_reported` / `derived` and carry no Git evidence — Git facts come exclusively from
+this tool's own read-only Git Scanner. Import is optional: native agent logs
+(`~/.codex`, `~/.cursor`, ...) are scanned directly and do not require AI Exporter.
+
+The export contract is documented upstream in
+[AI Exporter's README](https://github.com/zhyr/Al-exporter/blob/main/README.md)
+("Interop Contract / 协同导出契约"); capability levels here are derived from its
+`interop.json` non-empty rates, not from schema presence. See also
+[docs/agent-adapters.md](docs/agent-adapters.md) and the Al-exporter import notes under
+[Known limitations](#known-limitations).
 
 ## Requirements
 
@@ -241,6 +318,10 @@ performed separately, read-only, and is documented with counts in
 - Content mode `full` may include prompts and code. `metadata_only` is recommended for
   anything that leaves your machine.
 
+## License
+
+MIT License — see [LICENSE](LICENSE). Copyright (c) 2026 zhyr.
+
 ---
 
 # 中文
@@ -262,6 +343,30 @@ performed separately, read-only, and is documented with counts in
 
 所有产物都来自手动执行的命令快照。工具不安装 Git Hook，不常驻后台，不监听文件变化，
 也不访问网络；源记录与 Git 仓库始终只读。
+
+## 与 Al-exporter 的关系
+
+本项目是 [AI Exporter（`zhyr/Al-exporter`）](https://github.com/zhyr/Al-exporter) 的**下游应用**，
+二者定位互补，而非相互替代：
+
+| | AI Exporter（上游） | aitimeline（本项目，下游） |
+| --- | --- | --- |
+| 角色 | 从 26+ 种 Agent 中抽取并导出对话，生成可移植归档（`manifest.json`、逐会话 JSON/Markdown、`interop.json`）。 | 把同一个项目的活动重建为统一、可校验的时间线，并按项目聚簇。 |
+| 核心问题 | 「Agent 和我说了什么？给我一份可移植副本 / 训练数据。」 | 「这个项目发生过什么、按什么顺序、在哪台设备、有什么证据支撑？」 |
+| 产物 | 导出归档、Markdown、JSON、训练/评估格式（Transfer2Eval）。 | Timeline 包：证据等级、provenance、SHA-256 完整性校验、离线 Viewer。 |
+| 身份标识 | `thread_id`、`session.native_id`、`messages[].id`、`device.source_device_id`。 | `dedup_key` + `content_hash` + provenance；`source_device_id` 与 `scanner_device_id` 分离。 |
+
+AI Exporter 的归档是本工具**支持的一种输入源**：内置的 `al-exporter` 导入适配器在模式 B
+（`--source-root` + `manifest.json`，schema 1.0.0 / 1.1.0）读取归档，采用其声明的源设备身份，
+并把导入消息按 `deterministic` / `inferred` 两级折叠进原生事件。导入事件一律为
+`agent_reported` / `derived`，不含 Git 证据——所有 Git 事实都来自本工具自带的只读 Git
+Scanner。导入是可选的：原生 Agent 日志（`~/.codex`、`~/.cursor` 等）会被直接扫描，
+无需先运行 AI Exporter。
+
+导出契约由上游 [AI Exporter README](https://github.com/zhyr/Al-exporter/blob/main/README.md)
+的「协同导出契约 / Interop Contract」定义；此处的能力等级依据 `interop.json` 的实际非空率，
+而非 schema 中是否存在该字段。详见 [Agent 适配器](docs/agent-adapters.md) 与
+[已知限制](#已知限制) 中的导入说明。
 
 ## 环境要求
 
@@ -465,3 +570,7 @@ npm run verify      # typecheck + 测试 + 构建
 - 仅支持手动执行。增量状态只保存文件指纹：未变化的会话文件复用上一次包中的结果，一旦
   文件变化则重新完整解析。
 - `full` 内容模式可能包含提示词和代码；任何要离开本机的包建议使用 `metadata_only`。
+
+## 许可证
+
+MIT License，详见 [LICENSE](LICENSE)。Copyright (c) 2026 zhyr。
