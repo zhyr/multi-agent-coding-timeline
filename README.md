@@ -54,8 +54,8 @@ project → read the unified timeline → drill down into conversation segments.
 
 *Segments aggregated by (session, device, agent), ordered by time and drillable.*
 
-> 截图来自本地实例 `aitimeline serve`。命令行模式见下文，交互式应用的设计见
-> [交互式扫描应用方案](docs/交互式扫描应用方案.md) 与 [中文使用指南](docs/使用指南-中文.md)。
+> 截图来自本地实例 `aitimeline serve`。命令行用法见下文；交互式应用直接运行
+> `aitimeline serve`，完整参数可用 `aitimeline serve --help` 查看。
 
 ---
 
@@ -96,8 +96,8 @@ this tool's own read-only Git Scanner. Import is optional: native agent logs
 The export contract is documented upstream in
 [AI Exporter's README](https://github.com/zhyr/Al-exporter/blob/main/README.md)
 ("Interop Contract / 协同导出契约"); capability levels here are derived from its
-`interop.json` non-empty rates, not from schema presence. See also
-[docs/agent-adapters.md](docs/agent-adapters.md) and the Al-exporter import notes under
+`interop.json` non-empty rates, not from schema presence. Run `aitimeline adapters` for the
+capability matrix and see the Al-exporter import notes under
 [Known limitations](#known-limitations).
 
 ## Requirements
@@ -189,7 +189,7 @@ verification, scan/merge warnings and preserved conflicts. No network requests, 
 | `adapters` | Show the honest adapter capability matrix |
 | `version` | Show CLI, format, schema and runtime versions |
 
-Full options and exit codes: [docs/cli-reference.md](docs/cli-reference.md).
+Full options and exit codes are available via `aitimeline <command> --help`.
 
 ## Timeline Package
 
@@ -213,7 +213,7 @@ integrity/checksums.sha256
 ```
 
 `integrity/checksums.sha256` covers every generated file except itself. `validate` fails on
-any content change. See [docs/timeline-schema.md](docs/timeline-schema.md).
+any content change.
 
 ## Evidence, not assumptions
 
@@ -248,22 +248,13 @@ Every event carries `evidence.level` — `verified`, `agent_reported`, `inferred
 | `opencode` | partially verified | 1 | `project/session/message/part` JSON; text parts only, no tool parts observed |
 | `al-exporter` | partially verified | 3,321 + 3 | import only: explicit `--source-root` + `manifest.json`; schema 1.0.0 and 1.1.0; 1.1.0 adds session cwd/remote, message ids and a declared device |
 
-Details and per-field capability levels: [docs/agent-adapters.md](docs/agent-adapters.md).
+Run `aitimeline adapters` for per-field capability levels.
 
 ## Documentation
 
-- [Product design](docs/product-design.md)
-- [Architecture](docs/architecture.md)
-- [Timeline schema](docs/timeline-schema.md)
-- [Agent adapters](docs/agent-adapters.md)
-- [Project resolution](docs/project-resolution.md)
-- [Remote scanning](docs/remote-scanning.md)
-- [Timeline merging](docs/timeline-merging.md)
-- [Security and privacy](docs/security-and-privacy.md)
-- [CLI reference](docs/cli-reference.md)
-- [Testing and verification](docs/testing-and-verification.md)
-- [Release notes](docs/release-notes.md)
-- [Product specification](docs/AI%20Coding%20Timeline%20Scanner.md)
+Detailed design documents and verification reports are internal engineering material and
+are not published in this open-source repository. `docs/demo/` only holds the screenshots
+used above.
 
 ## Development
 
@@ -276,8 +267,7 @@ npm run verify      # typecheck + tests + build
 
 Node is required for all commands. Tests use synthetic fixtures in temporary directories;
 no home directory data is read during the test suite. Real-data adapter verification was
-performed separately, read-only, and is documented with counts in
-[docs/testing-and-verification.md](docs/testing-and-verification.md).
+performed separately, read-only; the counts in the table above come from that run.
 
 ## Known limitations
 
@@ -311,8 +301,7 @@ performed separately, read-only, and is documented with counts in
 - Deduplication is scoped by `dedup_key`, which includes the source device. If the same
   session is scanned on two devices, both device-level observations are retained rather than
   collapsed into one device-agnostic event. This preserves provenance; it is not a claim that
-  all logically identical cross-device activities were merged. See
-  [docs/timeline-merging.md](docs/timeline-merging.md).
+  all logically identical cross-device activities were merged.
 - Only manual runs are supported. Incremental state stores fingerprints only; unchanged
   session files are reused from the previous package, and any change forces a full re-parse.
 - Content mode `full` may include prompts and code. `metadata_only` is recommended for
@@ -365,8 +354,8 @@ Scanner。导入是可选的：原生 Agent 日志（`~/.codex`、`~/.cursor` �
 
 导出契约由上游 [AI Exporter README](https://github.com/zhyr/Al-exporter/blob/main/README.md)
 的「协同导出契约 / Interop Contract」定义；此处的能力等级依据 `interop.json` 的实际非空率，
-而非 schema 中是否存在该字段。详见 [Agent 适配器](docs/agent-adapters.md) 与
-[已知限制](#已知限制) 中的导入说明。
+而非 schema 中是否存在该字段。能力矩阵可运行 `aitimeline adapters` 查看，导入说明见
+[已知限制](#已知限制)。
 
 ## 环境要求
 
@@ -456,7 +445,7 @@ open ./timeline.html
 | `adapters` | 展示真实的适配器能力矩阵 |
 | `version` | 显示 CLI、格式、Schema 与运行时版本 |
 
-完整参数与退出码见 [docs/cli-reference.md](docs/cli-reference.md)。
+完整参数与退出码可通过 `aitimeline <命令> --help` 查看。
 
 ## Timeline 包结构
 
@@ -480,7 +469,7 @@ integrity/checksums.sha256
 ```
 
 `integrity/checksums.sha256` 覆盖除自身以外的所有生成文件；任何内容改动都会让
-`validate` 失败。详见 [docs/timeline-schema.md](docs/timeline-schema.md)。
+`validate` 失败。
 
 ## 以证据为准，不做假设
 
@@ -513,22 +502,11 @@ integrity/checksums.sha256
 | `opencode` | partially verified | 1 | `project/session/message/part` JSON；仅观察到 text part，未观察到工具调用 |
 | `al-exporter` | partially verified | 3,321 + 3 | 仅导入：必须显式 `--source-root` + `manifest.json`；兼容 schema 1.0.0/1.1.0；1.1.0 提供 session cwd/remote、消息 id 与声明的设备 |
 
-字段级能力等级与实现细节见 [docs/agent-adapters.md](docs/agent-adapters.md)。
+字段级能力等级可运行 `aitimeline adapters` 查看。
 
 ## 文档
 
-- [产品设计](docs/product-design.md)
-- [架构](docs/architecture.md)
-- [Timeline Schema](docs/timeline-schema.md)
-- [Agent 适配器](docs/agent-adapters.md)
-- [项目识别](docs/project-resolution.md)
-- [远程扫描](docs/remote-scanning.md)
-- [时间线合并](docs/timeline-merging.md)
-- [安全与隐私](docs/security-and-privacy.md)
-- [CLI 参考](docs/cli-reference.md)
-- [测试与验证](docs/testing-and-verification.md)
-- [发布说明](docs/release-notes.md)
-- [产品规格](docs/AI%20Coding%20Timeline%20Scanner.md)
+详细设计文档与验证报告属于内部工程资料，不随本开源仓库发布；`docs/demo/` 目录仅存放上述截图。
 
 ## 开发
 
@@ -540,8 +518,7 @@ npm run verify      # typecheck + 测试 + 构建
 ```
 
 所有命令都依赖 Node。测试只使用临时目录中的合成样本，不会读取用户主目录中的真实数据。
-真实数据的适配器验证是另外单独执行的，全程只读，具体数量记录在
-[docs/testing-and-verification.md](docs/testing-and-verification.md)。
+真实数据的适配器验证是另外单独执行的，全程只读，上表中的实测数量即来自该次验证。
 
 ## 已知限制
 
