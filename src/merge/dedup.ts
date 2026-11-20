@@ -1,4 +1,5 @@
 import { computeConflictEventId, computeEventId } from '../core/ids.js';
+import { sha256, shortId, stableId } from '../core/hash.js';
 import type { ActivityEvent, ConflictRecord } from '../schema/entities.js';
 
 export interface DedupResult {
@@ -23,6 +24,14 @@ export interface DedupResult {
    * two records are not proven to be the same underlying row.
    */
   inferred_pairs: number;
+  /** Native-id / git-object / copied-session groups spanning more than one device. */
+  cross_device_deterministic: number;
+  /** Content-based cross-device candidate groups (events kept, never merged). */
+  cross_device_candidates: number;
+  /** Conflicting content under the same identity across devices. */
+  cross_device_conflicts: number;
+  /** Shipped events whose observers span more than one device. */
+  cross_device_merged: number;
 }
 
 /** Capture method written by the Al-exporter import adapter. */
@@ -94,6 +103,269 @@ function attachFoldedImport(
   };
 }
 
+type Observer = NonNullable<ActivityEvent['provenance']['observers']>[number];
+type ObserverRelation = NonNullable<Observer['relation']>;
+
+function observerOf(event: ActivityEvent, relation: ObserverRelation, diverged = false): Observer {
+  return {
+    device_id: event.device_id,
+    scanner_device_id: event.scanner_device_id,
+    source_path: event.provenance.source_path,
+    source_path_identity: event.provenance.source_path_identity,
+    source_record_id: event.provenance.source_record_id,
+    capture_method: event.provenance.capture_method,
+    capture_level: event.provenance.capture_level,
+    observed_at: event.time.observed_at,
+    content_hash: event.content_hash,
+    content_diverged: diverged || undefined,
+    relation,
+  };
+}
+
+function observerKey(observer: Observer): string {
+  return [
+    observer.device_id,
+    observer.scanner_device_id ?? '',
+    observer.source_path_identity ?? observer.source_path ?? '',
+    observer.source_record_id ?? '',
+    observer.content_hash ?? '',
+    observer.relation ?? '',
+  ].join('\u0000');
+}
+
+function mergeObservers(event: ActivityEvent, added: readonly Observer[]): ActivityEvent {
+  if (added.length === 0) return event;
+  const map = new Map<string, Observer>();
+  for (const observer of (event.provenance.observers ?? []) as Observer[]) {
+    map.set(observerKey(observer), observer);
+  }
+  for (const observer of added) {
+    const key = observerKey(observer);
+    const prior = map.get(key);
+    map.set(key, prior && prior.content_diverged ? prior : observer);
+  }
+  const observers = [...map.values()].sort((a, b) => observerKey(a).localeCompare(observerKey(b)));
+  return {
+    ...event,
+    provenance: { ...event.provenance, observers } as ActivityEvent['provenance'],
+  };
+}
+
+function appendNote(existing: string | undefined, extra: string): string {
+  if (!existing) return extra;
+  return existing.includes(extra) ? existing : `${existing}; ${extra}`;
+}
+
+function withCorrelationId(
+  event: ActivityEvent,
+  correlationId: string,
+  note: string,
+  relatedEventIds: readonly string[],
+  kind: 'directly_observed' | 'time_based_inference',
+  confidence: 'exact' | 'candidate',
+): ActivityEvent {
+  const prior = event.correlation;
+  return {
+    ...event,
+    correlation_id: correlationId,
+    correlation: {
+      kind: prior?.kind ?? kind,
+      match_confidence: prior?.match_confidence ?? confidence,
+      note: appendNote(prior?.note, note),
+      related_event_ids: [
+        ...new Set([...(prior?.related_event_ids ?? []), ...relatedEventIds.filter((id) => id !== event.event_id)]),
+      ].sort(),
+    },
+  };
+}
+
+function distinctDevices(events: readonly ActivityEvent[]): Set<string> {
+  return new Set(events.map((event) => event.device_id));
+}
+
+/**
+ * A source device can be scanned by several scanner devices (for example a
+ * remote scan plus a local scan). That is more than one observation even though
+ * the source_device_id is identical, so observers are keyed on both.
+ */
+function observationNodes(events: readonly ActivityEvent[]): Set<string> {
+  return new Set(events.map((event) => `${event.device_id}\u0000${event.scanner_device_id ?? ''}`));
+}
+
+/**
+ * Fold git commit events that describe the same commit object on different
+ * devices. A Git SHA is content-addressed, so this is a deterministic identity,
+ * not an inference. Commit events are folded in place (one canonical event with
+ * per-device observers). Pushes are intentionally NOT folded: a push is
+ * per-device evidence even when the commit is shared.
+ */
+function foldCrossDeviceGitCommits(
+  events: readonly ActivityEvent[],
+  inputTimelineIds: string[],
+): { events: ActivityEvent[]; groups: number; conflicts: ConflictRecord[]; conflictGroups: number } {
+  if (new Set(events.map((event) => event.device_id)).size < 2) {
+    return { events: [...events], groups: 0, conflicts: [], conflictGroups: 0 };
+  }
+  const groups = new Map<string, ActivityEvent[]>();
+  for (const event of events) {
+    if (event.event_type !== 'git.commit.created') continue;
+    const sha = event.git?.commit_sha;
+    if (!sha) continue;
+    const key = `${event.project_id}\u0000${sha.toLowerCase()}`;
+    const list = groups.get(key);
+    if (list) list.push(event);
+    else groups.set(key, [event]);
+  }
+
+  const superseded = new Set<ActivityEvent>();
+  const replacements = new Map<ActivityEvent, ActivityEvent>();
+  const conflicts: ConflictRecord[] = [];
+  let foldedGroups = 0;
+  let conflictGroups = 0;
+
+  for (const [key, group] of groups) {
+    if (distinctDevices(group).size < 2) continue;
+    foldedGroups += 1;
+    const ordered = [...group].sort((a, b) => a.event_id.localeCompare(b.event_id));
+    const primary = ordered[0]!;
+    const byHash = new Map<string, ActivityEvent[]>();
+    for (const event of ordered) {
+      const hash = event.content_hash ?? '';
+      const list = byHash.get(hash);
+      if (list) list.push(event);
+      else byHash.set(hash, [event]);
+    }
+    const hashes = [...byHash.keys()].sort();
+    // The canonical event and the canonical hash must belong to the same
+    // observation. Picking the smallest hash independently would overwrite the
+    // canonical replacement when that hash belongs to another event.
+    const primaryHash = primary.content_hash ?? '';
+    const correlationId = shortId('corr', 'git', primary.project_id, primary.git?.commit_sha);
+    const observations = (hash: string) =>
+      (byHash.get(hash) ?? []).map((event) => observerOf(event, 'git_object', hash !== primaryHash));
+
+    let canonical = mergeObservers(
+      withCorrelationId(
+        primary,
+        correlationId,
+        `same git commit ${primary.git?.commit_sha ?? ''} observed on ${distinctDevices(group).size} devices (deterministic SHA identity)`,
+        [],
+        'directly_observed',
+        'exact',
+      ),
+      observations(primaryHash),
+    );
+    replacements.set(primary, canonical);
+    for (const event of ordered.slice(1)) superseded.add(event);
+
+    for (const hash of hashes.filter((h) => h !== primaryHash)) {
+      const variantSource = byHash.get(hash)![0]!;
+      const variant = mergeObservers(
+        withCorrelationId(
+          {
+            ...variantSource,
+            event_id: computeConflictEventId(key, hash),
+          },
+          correlationId,
+          'same git commit SHA but differing event content; both versions preserved',
+          [primary.event_id],
+          'directly_observed',
+          'exact',
+        ),
+        observations(hash),
+      );
+      replacements.set(variantSource, variant);
+      conflicts.push({
+        dedup_key: key,
+        kept_event_id: primary.event_id,
+        variant_event_id: variant.event_id,
+        reason: 'same git commit object but different content hash across devices',
+        input_timeline_ids: inputTimelineIds,
+      });
+      conflictGroups += 1;
+    }
+  }
+
+  if (foldedGroups === 0) return { events: [...events], groups: 0, conflicts, conflictGroups: 0 };
+  const output: ActivityEvent[] = [];
+  for (const event of events) {
+    const replacement = replacements.get(event);
+    if (replacement) output.push(replacement);
+    else if (!superseded.has(event)) output.push(event);
+  }
+  return { events: output, groups: foldedGroups, conflicts, conflictGroups };
+}
+
+/**
+ * Content fingerprint for cross-device candidate correlation. Deliberately
+ * excludes device, native ids and session ids: a copied session is handled
+ * deterministically by the native-id tier instead. Matches here are only
+ * candidates and never remove an event.
+ */
+function crossDeviceContentKey(event: ActivityEvent): string | undefined {
+  const agent = event.agent;
+  if (!agent?.agent_id) return undefined;
+  const activity = event.activity ?? {};
+  const content = activity.content ?? activity.content_summary;
+  // Without real text there is not enough evidence for a cross-device
+  // candidate; identical role/type/length alone is a coincidence.
+  if (content === undefined || content.trim() === '') return undefined;
+  if (!event.time.occurred_at) return undefined;
+  return [
+    event.project_id,
+    agent.agent_id,
+    event.event_type,
+    event.time.occurred_at,
+    activity.role ?? '',
+    activity.tool_name ?? '',
+    sha256(content),
+  ].join('\u0000');
+}
+
+function correlateCrossDeviceContent(events: ActivityEvent[]): {
+  events: ActivityEvent[];
+  groups: number;
+  mergedEvents: number;
+} {
+  if (new Set(events.map((event) => event.device_id)).size < 2) {
+    return { events, groups: 0, mergedEvents: 0 };
+  }
+  const groups = new Map<string, ActivityEvent[]>();
+  for (const event of events) {
+    const key = crossDeviceContentKey(event);
+    if (!key) continue;
+    const list = groups.get(key);
+    if (list) list.push(event);
+    else groups.set(key, [event]);
+  }
+
+  let groupsCount = 0;
+  let mergedEvents = 0;
+  const indexById = new Map(events.map((event, index) => [event.event_id, index]));
+  for (const [key, group] of groups) {
+    if (distinctDevices(group).size < 2) continue;
+    const eligible = group.filter((event) => !event.correlation_id);
+    if (distinctDevices(eligible).size < 2) continue;
+    groupsCount += 1;
+    const correlationId = stableId('corr', 'content', key);
+    const ids = eligible.map((event) => event.event_id).sort();
+    for (const event of eligible) {
+      const at = indexById.get(event.event_id);
+      if (at === undefined) continue;
+      events[at] = withCorrelationId(
+        event,
+        correlationId,
+        `cross-device content candidate across ${distinctDevices(eligible).size} devices; events preserved and not merged`,
+        ids,
+        'time_based_inference',
+        'candidate',
+      );
+      mergedEvents += 1;
+    }
+  }
+  return { events, groups: groupsCount, mergedEvents };
+}
+
 /** Deterministic ordering for both scan and merge. */
 export function sortEvents(events: ActivityEvent[]): ActivityEvent[] {
   return [...events].sort((a, b) => {
@@ -130,16 +402,23 @@ export function deduplicateEvents(
   // involved. Removing it before grouping also avoids a false conflict variant.
   const deterministic = foldDeterministicImports(input);
   const lineFold = foldLineIdentityImports(deterministic.events, deterministic.pairedNative);
+  // A Git SHA is the same object on every device: fold those before the
+  // per-device dedup_key grouping.
+  const gitFold = foldCrossDeviceGitCommits(lineFold.events, inputTimelineIds);
   const groups = new Map<string, ActivityEvent[]>();
-  for (const event of lineFold.events) {
+  for (const event of gitFold.events) {
     const group = groups.get(event.dedup_key);
     if (group) group.push(event);
     else groups.set(event.dedup_key, [event]);
   }
 
   const kept: ActivityEvent[] = [];
-  const conflicts: ConflictRecord[] = [];
-  let duplicates = 0;
+  const conflicts: ConflictRecord[] = [...gitFold.conflicts];
+  let duplicates = lineFold.events.length - gitFold.events.length;
+  let crossDeviceDeterministic = gitFold.groups;
+  let crossDeviceCandidates = 0;
+  let crossDeviceConflicts = gitFold.conflictGroups;
+  let crossDeviceMerged = 0;
   const canonicalEventId = (key: string) => computeEventId(key);
 
   for (const [key, group] of [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
@@ -151,17 +430,41 @@ export function deduplicateEvents(
     }
     duplicates += ordered.length - byHash.size;
 
+    const crossDevice = observationNodes(ordered).size > 1;
+    const correlationId = crossDevice ? shortId('corr', 'native', key) : undefined;
+    if (crossDevice) crossDeviceDeterministic += 1;
+
     const hashes = [...byHash.keys()].sort();
     const primaryHash = hashes[0] ?? '';
     const primarySource = byHash.get(primaryHash);
     if (!primarySource) continue;
     const primaryId = canonicalEventId(key);
-    kept.push({ ...primarySource, event_id: primaryId });
+    let primary: ActivityEvent = { ...primarySource, event_id: primaryId };
+    if (crossDevice && correlationId) {
+      const observations = ordered
+        .filter((event) => (event.content_hash ?? '') === primaryHash)
+        .map((event) => observerOf(event, 'same_native_id'));
+      primary = mergeObservers(
+        withCorrelationId(
+          primary,
+          correlationId,
+          `same native event identity (${primarySource.dedup_tier}) observed by ${observationNodes(ordered).size} device/scanner combination(s)`,
+          [],
+          'directly_observed',
+          'exact',
+        ),
+        observations,
+      );
+      if (observationNodes(ordered.filter((event) => (event.content_hash ?? '') === primaryHash)).size > 1) {
+        crossDeviceMerged += 1;
+      }
+    }
+    kept.push(primary);
 
     for (const hash of hashes.slice(1)) {
       const variantId = computeConflictEventId(key, hash);
       const source = byHash.get(hash)!;
-      kept.push({
+      let variant: ActivityEvent = {
         ...source,
         event_id: variantId,
         correlation: {
@@ -170,7 +473,25 @@ export function deduplicateEvents(
           note: 'conflicting variant of the same source record; both versions preserved',
           related_event_ids: [primaryId],
         },
-      });
+      };
+      if (crossDevice && correlationId) {
+        const observations = ordered
+          .filter((event) => (event.content_hash ?? '') === hash)
+          .map((event) => observerOf(event, 'same_native_id'));
+        variant = mergeObservers(
+          withCorrelationId(
+            variant,
+            correlationId,
+            'conflicting content under the same cross-device identity; both versions preserved',
+            [primaryId],
+            'directly_observed',
+            'exact',
+          ),
+          observations,
+        );
+        crossDeviceConflicts += 1;
+      }
+      kept.push(variant);
       conflicts.push({
         dedup_key: key,
         kept_event_id: primaryId,
@@ -182,14 +503,19 @@ export function deduplicateEvents(
   }
 
   const pairing = pairImportedEvents(kept);
+  const correlation = correlateCrossDeviceContent(pairing.events);
   return {
-    events: sortEvents(pairing.events),
+    events: sortEvents(correlation.events),
     duplicates:
       duplicates + deterministic.deterministicPairs + lineFold.linePairs + pairing.inferredPairs,
     conflicts,
     deterministic_pairs: deterministic.deterministicPairs,
     line_pairs: lineFold.linePairs,
     inferred_pairs: pairing.inferredPairs,
+    cross_device_deterministic: crossDeviceDeterministic,
+    cross_device_candidates: crossDeviceCandidates + correlation.groups,
+    cross_device_conflicts: crossDeviceConflicts,
+    cross_device_merged: crossDeviceMerged,
   };
 }
 

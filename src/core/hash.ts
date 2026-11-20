@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
 
 /** SHA-256 hex digest of a string or buffer. */
 export function sha256(data: string | Uint8Array): string {
@@ -51,4 +52,24 @@ export async function hashFile(path: string): Promise<string> {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
   return hash.digest('hex');
+}
+
+/**
+ * Streaming SHA-256 with a size ceiling. Files above `maxBytes` are not hashed
+ * (the caller falls back to a metadata fingerprint); this keeps a scan from
+ * reading multi-hundred-megabyte editor databases in full on every run.
+ */
+export async function hashFileBounded(
+  path: string,
+  maxBytes: number,
+): Promise<{ sha256?: string; bytesRead: number; exceeded: boolean }> {
+  const info = await stat(path);
+  if (info.size > maxBytes) return { bytesRead: 0, exceeded: true };
+  const hash = createHash('sha256');
+  let bytesRead = 0;
+  for await (const chunk of createReadStream(path)) {
+    bytesRead += (chunk as Buffer).length;
+    hash.update(chunk as Buffer);
+  }
+  return { sha256: hash.digest('hex'), bytesRead, exceeded: false };
 }

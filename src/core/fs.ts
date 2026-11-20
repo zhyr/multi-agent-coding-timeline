@@ -51,6 +51,37 @@ export async function assertReadableFile(target: string, label = 'file'): Promis
   if (!info.readable) throw new IoError(`${label} is not readable (permission denied): ${target}`);
 }
 
+/**
+ * Full stat identity for an incremental fingerprint. `ctime` is included
+ * because it changes on every write and cannot be back-dated from user space,
+ * which makes it a useful last line of defence when a tool preserves mtime.
+ */
+export interface FileSignature {
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  ino: number;
+  mtimeIso: string;
+  ctimeIso: string;
+}
+
+export async function fileSignature(target: string): Promise<FileSignature> {
+  const st = await stat(target);
+  return {
+    size: st.size,
+    mtimeMs: st.mtimeMs,
+    ctimeMs: st.ctimeMs,
+    ino: st.ino,
+    mtimeIso: st.mtime.toISOString(),
+    ctimeIso: st.ctime.toISOString(),
+  };
+}
+
+/** True when two stat reads describe the same file state (size/time/inode). */
+export function sameFileSignature(a: FileSignature, b: FileSignature): boolean {
+  return a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs && a.ino === b.ino;
+}
+
 /** Resolve a candidate path and reject traversal outside `base`. */
 export function resolveWithin(base: string, candidate: string): string {
   const root = path.resolve(base);

@@ -289,7 +289,7 @@ export function makeEvent(overrides: Partial<ActivityEvent> = {}): ActivityEvent
       event_type: merged.event_type,
       time: merged.time,
       activity: merged.activity,
-      provenance: merged.provenance,
+      git: merged.git,
     });
   }
   if (!overrides.event_id) merged.event_id = computeEventId(merged.dedup_key);

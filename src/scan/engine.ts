@@ -2,8 +2,8 @@ import path from 'node:path';
 import { hostname, platform } from 'node:os';
 import { FORMAT, FORMAT_VERSION, SCHEMA_VERSION, type ContentMode } from '../core/constants.js';
 import { UsageError, ScanError, errorMessage } from '../core/errors.js';
-import { assertReadableDirectory, displayPath, inspectPath } from '../core/fs.js';
-import { shortId, hashObject } from '../core/hash.js';
+import { assertReadableDirectory, displayPath, fileSignature, inspectPath, sameFileSignature, type FileSignature } from '../core/fs.js';
+import { shortId, hashFileBounded } from '../core/hash.js';
 import { computeDeviceId, computeSessionId, computeTimelineId } from '../core/ids.js';
 import { FULL_EXPORT_WARNING } from '../core/redaction.js';
 import { expandHome, nowIso } from '../adapters/util.js';
@@ -35,7 +35,7 @@ import type {
   TaskRecord,
   TimelineDevice,
 } from '../schema/entities.js';
-import { isUnchanged, loadScanState, saveScanState, stateKey, type ScanState } from './state.js';
+import { CONTENT_HASH_LIMIT_BYTES, loadScanState, saveScanState, stateKey, verifyCursor, type ScanState } from './state.js';
 
 export interface ScanOptions {
   project: string;
@@ -83,6 +83,8 @@ function emptyReport(projectId: string, sourceDeviceId: string, scannerDeviceId:
     sessions_candidate_only: 0,
     sessions_candidates_included: 0,
     sessions_reused_unchanged: 0,
+    sources_fingerprint_checked: 0,
+    sources_changed_during_read: 0,
     events_extracted: 0,
     events_rejected: 0,
     git_commits: 0,
@@ -329,7 +331,12 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
   const taskRecords: TaskRecord[] = [];
   const sourceEntries: SourceEntry[] = [];
   const usedAgentIds = new Set<string>();
-  const nextStateFiles: ScanState['files'] = {};
+  // Start from the previous state so cursors for other devices/agents survive
+  // when they are not part of this scan. Scoped-but-unseen keys are pruned
+  // below only when their directory walk completed successfully.
+  const nextStateFiles: ScanState['files'] = { ...state.files };
+  const seenStateKeys = new Set<string>();
+  const enumeratedScopes = new Map<string, boolean>();
   let symlinksSkipped = 0;
 
   for (const { adapter, source } of usable) {
@@ -364,46 +371,100 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
         `${adapter.id}: directory walk reached its depth/file limit under ${source.display_path}; remaining sessions were not enumerated`,
       );
     }
+    const scopeKey = `${sourceDeviceId}\u0000${adapter.id}`;
+    const scopeComplete = sourceMeta.walk_truncated !== true && inaccessible === 0;
+    enumeratedScopes.set(scopeKey, (enumeratedScopes.get(scopeKey) ?? true) && scopeComplete);
     for (const session of sessions) {
       const sessionId = computeSessionId(sourceDeviceId, adapter.id, session.native_session_id);
       const identityPath = buildSourcePathIdentity(adapter.id, session.relative_path);
       const key = stateKey(sourceDeviceId, adapter.id, session.relative_path);
 
-      // Incremental reuse: unchanged files contribute their previously normalized events.
-      if (!options.forceRescan && isUnchanged(state, key, session.size_bytes, session.modified_at)) {
-        const reused = priorEvents.filter((e) => e.provenance.source_path_identity === identityPath);
-        if (reused.length > 0) {
-          allEvents.push(...reused);
-          const priorSession = priorSessions.find((s) => s.session_id === sessionId);
-          if (priorSession) sessionRecords.push(priorSession);
-          // Reused sessions must keep their task record too; otherwise an
-          // incremental scan silently drops tasks that a full re-parse creates.
-          for (const task of priorTasks.filter((t) => t.session_id === sessionId)) {
-            taskRecords.push(task);
+      // Incremental reuse: size+mtime is only a cheap pre-check. A file is
+      // reused only when its content fingerprint still matches the cursor.
+      // Sessions whose content spans multiple files (OpenCode) opt out.
+      if (!options.forceRescan && !session.incremental_unsafe) {
+        const cursor = state.files[key];
+        if (cursor) {
+          const check = await verifyCursor(cursor, session.path, session.size_bytes, session.modified_at);
+          report.sources_fingerprint_checked = (report.sources_fingerprint_checked ?? 0) + 1;
+          if (check.status !== 'changed') {
+            if (check.status === 'unstable') {
+              report.sources_changed_during_read = (report.sources_changed_during_read ?? 0) + 1;
+              report.warnings.push(`${adapter.id}/${session.relative_path}: ${check.reason}`);
+            }
+            const reused = priorEvents.filter((e) => e.provenance.source_path_identity === identityPath);
+            if (reused.length > 0) {
+              allEvents.push(...reused);
+              const priorSession = priorSessions.find((s) => s.session_id === sessionId);
+              if (priorSession) {
+                sessionRecords.push(check.status === 'unstable' ? { ...priorSession, incomplete: true } : priorSession);
+              }
+              // Reused sessions must keep their task record too; otherwise an
+              // incremental scan silently drops tasks that a full re-parse creates.
+              for (const task of priorTasks.filter((t) => t.session_id === sessionId)) {
+                taskRecords.push(task);
+              }
+              report.sources_skipped_unchanged += 1;
+              report.sessions_reused_unchanged = (report.sessions_reused_unchanged ?? 0) + 1;
+              if (reused.some((e) => (e.provenance.confidence ?? 0) >= 0.8)) report.sessions_matched += 1;
+              else report.sessions_candidates_included = (report.sessions_candidates_included ?? 0) + 1;
+              sourceEntries.push({
+                source_id: shortId('src', key),
+                agent_id: adapter.id,
+                device_id: sourceDeviceId,
+                source_path: displayPath(session.path),
+                source_path_identity: identityPath,
+                source_type: source.format,
+                size_bytes: session.size_bytes,
+                modified_at: session.modified_at,
+                sha256: cursor.sha256,
+                record_count: reused.length,
+                status: check.status === 'unchanged' ? 'skipped_unchanged' : 'partial',
+                reason: check.status === 'unchanged'
+                  ? `fingerprint unchanged (${check.reason})`
+                  : `${check.reason}; previous complete snapshot retained, next scan will retry`,
+              });
+              // Keep the old cursor: the file is still changing, so the next
+              // run must re-verify rather than trust this read.
+              nextStateFiles[key] = cursor;
+              seenStateKeys.add(key);
+              usedAgentIds.add(adapter.id);
+              continue;
+            }
+            if (check.status === 'unstable') {
+              // No complete prior snapshot to fall back on; defer the file.
+              sourceEntries.push({
+                source_id: shortId('src', key),
+                agent_id: adapter.id,
+                device_id: sourceDeviceId,
+                source_path: displayPath(session.path),
+                source_path_identity: identityPath,
+                source_type: source.format,
+                size_bytes: session.size_bytes,
+                modified_at: session.modified_at,
+                record_count: 0,
+                status: 'partial',
+                reason: `${check.reason}; not committed, will retry on the next scan`,
+              });
+              continue;
+            }
+            // Unchanged but no prior events (for example an empty session):
+            // fall through and re-parse so the report still counts it.
           }
-          report.sources_skipped_unchanged += 1;
-          report.sessions_reused_unchanged = (report.sessions_reused_unchanged ?? 0) + 1;
-          if (reused.some((e) => (e.provenance.confidence ?? 0) >= 0.8)) report.sessions_matched += 1;
-          else report.sessions_candidates_included = (report.sessions_candidates_included ?? 0) + 1;
-          sourceEntries.push({
-            source_id: shortId('src', key),
-            agent_id: adapter.id,
-            device_id: sourceDeviceId,
-            source_path: displayPath(session.path),
-            source_path_identity: identityPath,
-            source_type: source.format,
-            size_bytes: session.size_bytes,
-            modified_at: session.modified_at,
-            record_count: reused.length,
-            status: 'skipped_unchanged',
-            reason: 'fingerprint unchanged since last manual scan',
-          });
-          nextStateFiles[key] = state.files[key]!;
-          usedAgentIds.add(adapter.id);
-          continue;
         }
       }
 
+      // From here on the file is re-read. Drop any previous cursor first; a
+      // failed, excluded, truncated or unfingerprinted read must not leave a
+      // stale "unchanged" marker behind.
+      delete nextStateFiles[key];
+
+      let sigBefore: FileSignature | undefined;
+      try {
+        sigBefore = await fileSignature(session.path);
+      } catch {
+        sigBefore = undefined;
+      }
       let parsed;
       try {
         parsed = await adapter.parseSession(session);
@@ -420,6 +481,76 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
           size_bytes: session.size_bytes,
           status: 'failed',
           reason: errorMessage(error),
+        });
+        continue;
+      }
+
+      // A parsed result is only trustworthy if the file was stable for the
+      // whole read. Re-stat after parsing and again after hashing; on any
+      // change, discard this read instead of persisting a half-updated session.
+      let contentFingerprint:
+        | { sha256?: string; kind: 'sha256' | 'stat'; ctime_at: string; inode: number; size: number; mtimeIso: string }
+        | undefined;
+      let unstableReason: string | undefined;
+      if (sigBefore) {
+        const sigAfter = await fileSignature(session.path).catch(() => undefined);
+        if (!sigAfter || !sameFileSignature(sigBefore, sigAfter)) {
+          unstableReason = 'file changed while it was being parsed';
+        } else {
+          const hashed = await hashFileBounded(session.path, CONTENT_HASH_LIMIT_BYTES).catch(() => undefined);
+          const sigFinal = await fileSignature(session.path).catch(() => undefined);
+          if (!hashed || !sigFinal || !sameFileSignature(sigAfter, sigFinal)) {
+            unstableReason = 'file changed while it was being fingerprinted';
+          } else {
+            contentFingerprint = {
+              sha256: hashed.sha256,
+              // Huge files fall back to ctime+inode; transcripts get SHA-256.
+              kind: hashed.exceeded ? 'stat' : 'sha256',
+              ctime_at: sigFinal.ctimeIso,
+              inode: sigFinal.ino,
+              size: sigFinal.size,
+              mtimeIso: sigFinal.mtimeIso,
+            };
+          }
+        }
+      } else {
+        report.warnings.push(
+          `${adapter.id}/${session.relative_path}: file metadata unavailable; parsed records kept but no reuse fingerprint was recorded`,
+        );
+      }
+
+      if (unstableReason) {
+        report.sources_changed_during_read = (report.sources_changed_during_read ?? 0) + 1;
+        report.warnings.push(`${adapter.id}/${session.relative_path}: ${unstableReason}; this read was discarded`);
+        const reused = priorEvents.filter((e) => e.provenance.source_path_identity === identityPath);
+        if (reused.length > 0) {
+          allEvents.push(...reused);
+          const priorSession = priorSessions.find((s) => s.session_id === sessionId);
+          if (priorSession) sessionRecords.push({ ...priorSession, incomplete: true });
+          for (const task of priorTasks.filter((t) => t.session_id === sessionId)) {
+            taskRecords.push(task);
+          }
+          report.sources_skipped_unchanged += 1;
+          report.sessions_reused_unchanged = (report.sessions_reused_unchanged ?? 0) + 1;
+          if (state.files[key]) {
+            nextStateFiles[key] = state.files[key]!;
+            seenStateKeys.add(key);
+          }
+        }
+        sourceEntries.push({
+          source_id: shortId('src', key),
+          agent_id: adapter.id,
+          device_id: sourceDeviceId,
+          source_path: displayPath(session.path),
+          source_path_identity: identityPath,
+          source_type: source.format,
+          size_bytes: session.size_bytes,
+          modified_at: session.modified_at,
+          record_count: reused.length,
+          status: 'partial',
+          reason: reused.length > 0
+            ? `${unstableReason}; previous complete snapshot retained, next scan will retry`
+            : `${unstableReason}; not committed, will retry on the next scan`,
         });
         continue;
       }
@@ -470,7 +601,9 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
       if (match.confidence === 'candidate') {
         report.sessions_candidates_included = (report.sessions_candidates_included ?? 0) + 1;
       } else report.sessions_matched += 1;
-      const sourceHash = hashObject({ agent: adapter.id, relative: session.relative_path, size: session.size_bytes, mtime: session.modified_at });
+      // Provenance source_hash is the real content fingerprint when available;
+      // never the old path+size+mtime pseudo-hash.
+      const sourceHash = contentFingerprint?.sha256;
       let count = 0;
       for (const record of parsed.records) {
         allEvents.push(
@@ -525,22 +658,31 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
         source_path: displayPath(session.path),
         source_path_identity: identityPath,
         source_type: source.format,
-        size_bytes: session.size_bytes,
-        modified_at: session.modified_at,
-        sha256: sourceHash,
+        size_bytes: contentFingerprint?.size ?? session.size_bytes,
+        modified_at: contentFingerprint?.mtimeIso ?? session.modified_at,
+        sha256: contentFingerprint?.sha256,
         record_count: count,
         malformed_records: parsed.issues.length,
         status: parsed.truncated ? 'partial' : 'scanned',
-        reason: parsed.truncated ? 'source truncated or partially readable' : undefined,
+        reason: parsed.truncated ? 'source truncated or partially readable; no reuse cursor recorded' : undefined,
       });
-      nextStateFiles[key] = {
-        size_bytes: session.size_bytes,
-        modified_at: session.modified_at ?? startedAt,
-        record_count: count,
-        source_path_identity: identityPath,
-        agent_id: adapter.id,
-        source_device_id: sourceDeviceId,
-      };
+      // A truncated read, or one whose listing carried no mtime (so it can
+      // never be verified later), is not recorded as a reusable cursor.
+      if (contentFingerprint && !parsed.truncated && session.modified_at) {
+        nextStateFiles[key] = {
+          size_bytes: contentFingerprint.size,
+          modified_at: contentFingerprint.mtimeIso,
+          sha256: contentFingerprint.sha256,
+          fingerprint_kind: contentFingerprint.kind,
+          ctime_at: contentFingerprint.ctime_at,
+          inode: contentFingerprint.inode,
+          record_count: count,
+          source_path_identity: identityPath,
+          agent_id: adapter.id,
+          source_device_id: sourceDeviceId,
+        };
+        seenStateKeys.add(key);
+      }
       usedAgentIds.add(adapter.id);
       report.sources_scanned += 1;
     }
@@ -733,6 +875,17 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
 
   if (!options.dryRun) {
     await writePackage(outputPath, data, { overwrite: options.force ?? false });
+    // Remove cursors for files that were enumerated but no longer exist (or
+    // are no longer reusable). Only prune scopes whose directory walk was
+    // complete: a truncated or unreadable walk must not erase state that a
+    // later scan could still reuse. Cursors belonging to other devices or
+    // unselected agents are preserved.
+    for (const [stateKeyValue, cursor] of Object.entries(nextStateFiles)) {
+      const scope = `${cursor.source_device_id}\u0000${cursor.agent_id}`;
+      if (enumeratedScopes.get(scope) === true && !seenStateKeys.has(stateKeyValue)) {
+        delete nextStateFiles[stateKeyValue];
+      }
+    }
     const nextState: ScanState = { version: 1, updated_at: report.completed_at, files: nextStateFiles };
     await saveScanState(stateDir, projectId, nextState);
     progress(`Wrote Timeline Package: ${displayPath(outputPath)}`);

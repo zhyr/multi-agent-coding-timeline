@@ -59,25 +59,107 @@ export async function readSessionText(
     };
   }
   let buffer: Buffer = raw;
+  let decompressionTruncated = false;
   if (isZst) {
-    try {
-      const zlib = await import('node:zlib');
-      const zstd = (zlib as unknown as { zstdDecompressSync?: (b: Buffer, o?: { maxOutputLength?: number }) => Buffer })
-        .zstdDecompressSync;
-      if (!zstd) throw new Error('this Node build has no zstd support');
-      buffer = zstd(raw, { maxOutputLength: MAX_DECOMPRESSED_BYTES });
-    } catch (error) {
-      return {
-        text: '',
-        truncated: true,
-        issues: [{ line: 0, reason: `zstd decompression failed: ${(error as Error).message}` }],
-      };
-    }
+    const result = await decompressBounded(raw, MAX_DECOMPRESSED_BYTES, MAX_SESSION_BYTES);
+    if (result.issues.length) return { text: '', truncated: true, issues: result.issues };
+    buffer = result.buffer;
+    decompressionTruncated = result.truncated;
   }
-  const truncated = inputTruncated || buffer.length > MAX_SESSION_BYTES;
-  const usable = buffer.length > MAX_SESSION_BYTES ? buffer.subarray(0, MAX_SESSION_BYTES) : buffer;
+  const truncated = inputTruncated || decompressionTruncated || buffer.length > MAX_SESSION_BYTES;
+  let usable = buffer.length > MAX_SESSION_BYTES ? buffer.subarray(0, MAX_SESSION_BYTES) : buffer;
+  if (truncated) {
+    // A byte-bounded read usually stops mid-record. Drop that partial tail so
+    // it is not misreported as malformed JSON; complete records are kept.
+    const lastNewline = usable.lastIndexOf(0x0a);
+    if (lastNewline >= 0) usable = usable.subarray(0, lastNewline + 1);
+  }
   if (truncated) issues.push({ line: 0, reason: 'session exceeds read limit; tail not processed' });
   return { text: usable.toString('utf8'), truncated, issues };
+}
+
+interface ZstdStream {
+  end(chunk?: Buffer): unknown;
+  destroy(): unknown;
+  removeAllListeners(): unknown;
+  on(event: 'data', listener: (chunk: Buffer) => void): ZstdStream;
+  on(event: 'end', listener: () => void): ZstdStream;
+  on(event: 'error', listener: (error: Error) => void): ZstdStream;
+}
+
+/**
+ * Decompress a zstd buffer without ever allocating the full output.
+ *
+ * The synchronous path is preferred and bounded by `maxOutputBytes`. When the
+ * output exceeds that bound Node throws ERR_BUFFER_TOO_LARGE; instead of
+ * discarding the session, fall back to streaming decompression and keep the
+ * first `maxKeepBytes` of output. The tail is marked truncated by the caller.
+ * Real Codex rollouts above 64 MiB triggered the previous all-or-nothing
+ * failure, losing every record in the file.
+ */
+export async function decompressBounded(
+  raw: Buffer,
+  maxOutputBytes: number,
+  maxKeepBytes: number,
+): Promise<{ buffer: Buffer; truncated: boolean; issues: ParseIssue[] }> {
+  let zlib: typeof import('node:zlib');
+  try {
+    zlib = await import('node:zlib');
+  } catch (error) {
+    return { buffer: Buffer.alloc(0), truncated: true, issues: [{ line: 0, reason: `zstd decompression failed: ${(error as Error).message}` }] };
+  }
+  const sync = (zlib as unknown as { zstdDecompressSync?: (b: Buffer, o?: { maxOutputLength?: number }) => Buffer }).zstdDecompressSync;
+  if (sync) {
+    try {
+      return { buffer: sync(raw, { maxOutputLength: maxOutputBytes }), truncated: false, issues: [] };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ERR_BUFFER_TOO_LARGE' && !/larger than maxOutputLength/i.test(String((error as Error).message))) {
+        return { buffer: Buffer.alloc(0), truncated: true, issues: [{ line: 0, reason: `zstd decompression failed: ${(error as Error).message}` }] };
+      }
+      // Fall through to bounded streaming.
+    }
+  }
+  const create = (zlib as unknown as { createZstdDecompress?: () => ZstdStream }).createZstdDecompress;
+  if (!create) {
+    return { buffer: Buffer.alloc(0), truncated: true, issues: [{ line: 0, reason: 'this Node build has no zstd streaming support' }] };
+  }
+  return new Promise((resolve) => {
+    const stream = create();
+    const chunks: Buffer[] = [];
+    let kept = 0;
+    let settled = false;
+    const finish = (truncated: boolean, error?: Error) => {
+      if (settled) return;
+      settled = true;
+      stream.removeAllListeners();
+      stream.destroy();
+      if (error && kept === 0) {
+        resolve({ buffer: Buffer.alloc(0), truncated: true, issues: [{ line: 0, reason: `zstd decompression failed: ${error.message}` }] });
+        return;
+      }
+      let buffer = Buffer.concat(chunks, kept);
+      if (truncated) {
+        // Drop a partial trailing record so the bounded tail is not reported as
+        // malformed JSON; whatever complete lines were read remain usable.
+        const lastNewline = buffer.lastIndexOf(0x0a);
+        if (lastNewline >= 0) buffer = buffer.subarray(0, lastNewline + 1);
+      }
+      resolve({ buffer, truncated, issues: error ? [{ line: 0, reason: `zstd stream ended after limit: ${error.message}` }] : [] });
+    };
+    stream.on('data', (chunk: Buffer) => {
+      if (settled) return;
+      const remaining = maxKeepBytes - kept;
+      if (remaining <= 0) { finish(true); return; }
+      const piece = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+      chunks.push(piece);
+      kept += piece.length;
+      if (chunk.length > remaining) finish(true);
+    });
+    stream.on('end', () => finish(false));
+    stream.on('error', (error: Error) => finish(true, error));
+    stream.end(raw);
+  });
 }
 
 /** Parse a JSONL buffer, isolating malformed and truncated lines. */

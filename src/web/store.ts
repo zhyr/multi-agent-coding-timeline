@@ -45,8 +45,16 @@ export function stateDir(dataDir: string): string {
   return path.join(dataDir, 'state');
 }
 
+/** Catalog ids are opaque and must never contain path separators. */
+const SAFE_ID = /^[A-Za-z0-9_-]{1,80}$/;
+
+export function assertSafeProjectId(projectId: string): string {
+  if (!SAFE_ID.test(projectId)) throw new Error('invalid project id');
+  return projectId;
+}
+
 export function projectOutputDir(dataDir: string, projectId: string): string {
-  return path.join(projectsDir(dataDir), projectId);
+  return path.join(projectsDir(dataDir), assertSafeProjectId(projectId));
 }
 
 export async function ensureLayout(dataDir: string): Promise<void> {

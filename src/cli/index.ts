@@ -8,7 +8,7 @@ import { runScan } from '../scan/engine.js';
 import { runMerge } from '../merge/engine.js';
 import { readPackage, validatePackage } from '../package/index.js';
 import { renderTimelineHtml } from '../viewer/build.js';
-import { startServer } from '../web/server.js';
+import { startServer, isLoopbackHost } from '../web/server.js';
 import {
   parseAgents,
   parseContentMode,
@@ -303,9 +303,11 @@ export function createProgram(): { program: Command; getExitCode: () => number }
   program
     .command('serve')
     .description('Start the interactive local web app (scan button, project list, timeline clusters)')
-    .option('--host <host>', 'bind host', '127.0.0.1')
+    .option('--host <host>', 'bind host (loopback by default)', '127.0.0.1')
     .option('--port <port>', 'bind port', '8766')
     .option('--data-dir <path>', 'local data directory for catalog/packages/state')
+    .option('--allow-remote', 'explicitly allow binding a non-loopback interface (requires a token)')
+    .option('--auth-token <token>', 'access token; generated automatically for non-loopback binds')
     .action(async (opts) => {
       const port = Number(opts.port);
       if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -315,11 +317,24 @@ export function createProgram(): { program: Command; getExitCode: () => number }
         host: opts.host,
         port,
         dataDir: opts.dataDir ? path.resolve(opts.dataDir) : undefined,
+        allowRemote: Boolean(opts.allowRemote),
+        authToken: opts.authToken,
       });
+      const displayHost = running.host.includes(':') ? `[${running.host}]` : running.host;
+      const baseUrl = `http://${displayHost}:${running.port}/`;
+      const url = running.token ? `${baseUrl}?token=${encodeURIComponent(running.token)}` : baseUrl;
+      const remote = !isLoopbackHost(running.host);
+      if (remote) {
+        process.stdout.write(
+          'WARNING: the web app is bound to a non-loopback interface. Anyone who can reach this port\n' +
+            '         AND possesses the token can browse scan results. Token auth is enabled.\n',
+        );
+      }
       process.stdout.write(
         `AI Coding Timeline web app running\n` +
-          `  URL:       http://${opts.host}:${port}/\n` +
+          `  URL:       ${url}\n` +
           `  data dir:  ${opts.dataDir ? path.resolve(opts.dataDir) : '(default ~/.aitimeline-web)'}\n` +
+          (running.token ? `  auth:      token required (shown in the URL above)\n` : '') +
           `  Press Ctrl+C to stop.\n`,
       );
       const shutdown = () => {

@@ -66,6 +66,13 @@ export interface SessionReference {
   modified_at?: string;
   project_evidence: ProjectEvidence;
   incomplete?: boolean;
+  /**
+   * True when this session's content spans multiple files/directories beyond
+   * `path` (for example OpenCode message/part records). Incremental reuse is
+   * disabled for such sessions because hashing `path` alone cannot prove that
+   * the whole session is unchanged.
+   */
+  incremental_unsafe?: boolean;
   metadata?: Record<string, unknown>;
 }
 

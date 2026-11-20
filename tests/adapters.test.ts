@@ -393,6 +393,107 @@ describe('WorkBuddy / TRAE adapters (partial formats)', () => {
   });
 });
 
+describe('Adapter conformance: empty, corrupt and format drift', () => {
+  const conversationAdapters = () => [
+    new CodexAdapter(),
+    new CursorAdapter(),
+    new QoderAdapter(),
+    new ClaudeCodeAdapter(),
+  ];
+
+  it('returns no records for empty session files', async () => {
+    await mkdir(path.join(root, 'conformance'), { recursive: true });
+    for (const adapter of [...conversationAdapters(), new WorkBuddyAdapter(), new TraeAdapter()]) {
+      const relative = `conformance/${adapter.id}-empty.jsonl`;
+      await writeFile(path.join(root, relative), '');
+      const result = await adapter.parseSession(sessionFor(relative, adapter.id));
+      expect(result.records, adapter.id).toEqual([]);
+    }
+  });
+
+  it('isolates corrupt JSON lines instead of throwing or silently dropping them', async () => {
+    await mkdir(path.join(root, 'conformance'), { recursive: true });
+    for (const adapter of [...conversationAdapters(), new WorkBuddyAdapter(), new TraeAdapter()]) {
+      const relative = `conformance/${adapter.id}-corrupt.jsonl`;
+      await writeFile(
+        path.join(root, relative),
+        '{"type":"response_item","payload":{"role":"user"}}\n{"this is not json"\n',
+      );
+      const result = await adapter.parseSession(sessionFor(relative, adapter.id));
+      expect(result.issues.length, adapter.id).toBeGreaterThan(0);
+      expect(
+        result.records.some((r) => r.event_type === 'agent.user_request.submitted' || r.event_type === 'agent.response.received'),
+        adapter.id,
+      ).toBe(false);
+    }
+  });
+
+  it('does not invent conversation events for unknown record shapes', async () => {
+    await mkdir(path.join(root, 'conformance'), { recursive: true });
+    for (const adapter of [...conversationAdapters(), new WorkBuddyAdapter(), new TraeAdapter()]) {
+      const relative = `conformance/${adapter.id}-drift.jsonl`;
+      await writeFile(path.join(root, relative), '{"type":"future_record_type","payload":{"x":1}}\n');
+      const result = await adapter.parseSession(sessionFor(relative, adapter.id));
+      expect(
+        result.records.some((r) => r.event_type === 'agent.user_request.submitted' || r.event_type === 'agent.response.received'),
+        adapter.id,
+      ).toBe(false);
+      if (adapter.id === 'trae') {
+        expect(result.records).toEqual([]);
+        expect(result.issues.some((issue) => issue.reason.includes('unrecognized Trae'))).toBe(true);
+      }
+    }
+  });
+
+  it('Claude Code: multi-turn timestamps, tool use/result, model and cwd evidence', async () => {
+    const claudeRoot = await tempDir('aitimeline-claude-');
+    const relative = 'projects/Users-zhyr-proj/session-1.jsonl';
+    await mkdir(path.dirname(path.join(claudeRoot, relative)), { recursive: true });
+    await writeJsonl(path.join(claudeRoot, relative), [
+      { type: 'user', uuid: 'u1', cwd: '/Users/zhyr/proj', timestamp: '2026-11-17T05:00:00.000Z', message: { role: 'user', content: 'question' } },
+      {
+        type: 'assistant', uuid: 'a1', cwd: '/Users/zhyr/proj', timestamp: '2026-11-17T05:00:02.000Z',
+        message: { role: 'assistant', model: 'claude-sonnet', content: [
+          { type: 'text', text: 'answer' },
+          { type: 'tool_use', id: 'tu-1', name: 'Read', input: { file_path: 'src/a.ts' } },
+        ] },
+      },
+      {
+        type: 'user', uuid: 'u2', cwd: '/Users/zhyr/proj', timestamp: '2026-11-17T05:00:03.000Z',
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: 'ok' }] },
+      },
+    ]);
+    const adapter = new ClaudeCodeAdapter();
+    const source: AgentSource = { ...sourceFor('claude-code'), root: claudeRoot, display_path: claudeRoot };
+    const sessions = await adapter.scanSessions(source);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]!.project_evidence.projectPathHints?.[0]).toBe('/Users/zhyr/proj');
+    const result = await adapter.parseSession(sessions[0]!);
+    expect(result.session_started_at).toBe('2026-11-17T05:00:00.000Z');
+    expect(result.session_ended_at).toBe('2026-11-17T05:00:03.000Z');
+    expect(result.model).toBe('claude-sonnet');
+    expect(result.records.map((r) => r.event_type)).toEqual([
+      'agent.user_request.submitted',
+      'agent.response.received',
+      'agent.tool.started',
+      'agent.user_request.submitted',
+      'agent.tool.completed',
+    ]);
+    const tool = result.records.find((r) => r.event_type === 'agent.tool.started')!;
+    expect(tool.tool_name).toBe('Read');
+    expect(tool.occurred_at).toBe('2026-11-17T05:00:02.000Z');
+    expect(result.records.every((r) => r.occurred_at)).toBe(true);
+  });
+
+  it('Qoder: preserves real timestamps and multi-turn parent references', async () => {
+    const relative = 'projects/encoded/qoder-conformance.jsonl';
+    await writeQoderSession(path.join(root, relative), CWD);
+    const result = await new QoderAdapter().parseSession(sessionFor(relative, 'qoder'));
+    expect(result.records.every((r) => Boolean(r.occurred_at))).toBe(true);
+    expect(result.records.some((r) => r.metadata?.parent_uuid === 'q-uuid-1')).toBe(true);
+  });
+});
+
 describe('Discovery-only adapters and honest capability declarations', () => {
   it('never fabricate sessions for unverified formats', async () => {
     for (const adapter of [new CodeBuddyAdapter(), new ZCodeAdapter()]) {

@@ -151,6 +151,21 @@ export async function runMerge(options: MergeOptions): Promise<MergeOutcome> {
       `${dedup.inferred_pairs} imported Al-exporter event(s) were paired with native records by session id, type, time and content; the pairing is inferred, not a confirmed identical record`,
     );
   }
+  if (dedup.cross_device_deterministic > 0) {
+    warnings.push(
+      `${dedup.cross_device_deterministic} cross-device identity group(s) were correlated deterministically (native id / git object / copied session); per-device observations are kept in provenance.observers`,
+    );
+  }
+  if (dedup.cross_device_candidates > 0) {
+    warnings.push(
+      `${dedup.cross_device_candidates} cross-device content candidate group(s) were associated by inference only; events were preserved and not merged`,
+    );
+  }
+  if (dedup.cross_device_conflicts > 0) {
+    warnings.push(
+      `${dedup.cross_device_conflicts} cross-device conflict variant(s) were preserved instead of being overwritten`,
+    );
+  }
   const eventIds = new Set(events.map((e) => e.event_id));
 
   const relations: EventRelation[] = mergeById(
@@ -213,6 +228,10 @@ export async function runMerge(options: MergeOptions): Promise<MergeOutcome> {
     merged_events: events.length,
     duplicate_events: dedup.duplicates,
     conflict_events: dedup.conflicts.length,
+    cross_device_deterministic: dedup.cross_device_deterministic,
+    cross_device_candidates: dedup.cross_device_candidates,
+    cross_device_conflicts: dedup.cross_device_conflicts,
+    cross_device_merged: dedup.cross_device_merged,
     unresolved_relations: Math.max(0, unresolvedRelations),
     schema_warnings: schemaWarnings,
     project_identity_status: compatibility.status,

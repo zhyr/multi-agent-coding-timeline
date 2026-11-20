@@ -135,25 +135,28 @@ export function computeConflictEventId(dedupKey: string, contentHash: string): s
   return shortId('evt', 'variant', dedupKey, contentHash);
 }
 
-/** Fields that define event content. Scanner identity and parser version are excluded. */
+/**
+ * Fields that define event content.
+ *
+ * Deliberately excludes the device-scoped session id, scanner identity, parser
+ * version and source path: the same record copied or synced to another device
+ * must hash identically, otherwise cross-device deterministic correlation sees
+ * a false conflict. True content divergence (activity, time, agent native ids,
+ * git data) still produces a different hash.
+ */
 export function computeContentHash(event: {
   event_type: string;
   time?: { occurred_at?: string };
   agent?: unknown;
-  session_id?: string;
   activity?: unknown;
   git?: unknown;
-  provenance?: { source_record_id?: string; source_path_identity?: string; source_path?: string };
 }): string {
   return hashObject({
     event_type: event.event_type,
     occurred_at: event.time?.occurred_at ?? null,
     agent: event.agent ?? null,
-    session_id: event.session_id ?? null,
     activity: event.activity ?? null,
     git: event.git ?? null,
-    source_record_id: event.provenance?.source_record_id ?? null,
-    source_path_identity: event.provenance?.source_path_identity ?? event.provenance?.source_path ?? null,
   });
 }
 

@@ -165,6 +165,10 @@ export class OpenCodeAdapter implements AgentAdapter {
         relative_path: relative,
         size_bytes: size,
         modified_at: modified,
+        // Message and part records live in sibling directories. The session
+        // JSON alone cannot prove the conversation is unchanged, so the engine
+        // must re-parse this session instead of reusing a file-hash cursor.
+        incremental_unsafe: true,
         project_evidence: evidenceOf(parsed, worktrees),
         metadata: {
           skipped_symlinks: walked.skippedSymlinks,

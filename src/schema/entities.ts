@@ -25,6 +25,12 @@ export const ActivityEventSchema = obj({
   repository_id: z.string().optional(),
   device_id: NonEmpty,
   scanner_device_id: z.string().optional(),
+  /**
+   * Stable cross-device association id. Events that describe the same
+   * underlying activity on different devices share this id but keep their own
+   * event_id/device_id; observations are listed in provenance.observers.
+   */
+  correlation_id: z.string().optional(),
 
   agent: obj({
     agent_id: NonEmpty,
@@ -105,6 +111,29 @@ export const ActivityEventSchema = obj({
           source_hash: z.string().optional(),
           content_hash: z.string().optional(),
           content_diverged: z.boolean().optional(),
+        }),
+      )
+      .optional(),
+    /**
+     * Every device/scanner observation that supports this event. A single
+     * canonical event can be observed on several devices (native-id dedup or a
+     * copied session) without losing the per-device evidence. The canonical
+     * event's own device/scanner remains in device_id/scanner_device_id.
+     */
+    observers: z
+      .array(
+        obj({
+          device_id: NonEmpty,
+          scanner_device_id: z.string().optional(),
+          source_path: z.string().optional(),
+          source_path_identity: z.string().optional(),
+          source_record_id: z.string().optional(),
+          capture_method: z.string().optional(),
+          capture_level: z.enum(['observed', 'derived', 'reported', 'unknown']).optional(),
+          observed_at: z.string().optional(),
+          content_hash: z.string().optional(),
+          content_diverged: z.boolean().optional(),
+          relation: z.enum(['same_native_id', 'content_match', 'git_object', 'copied_session']).optional(),
         }),
       )
       .optional(),
@@ -327,6 +356,10 @@ export const ScanReportSchema = obj({
   sessions_candidates_included: z.number().int().nonnegative().optional(),
   /** Sessions whose records were reused from an unchanged prior scan. */
   sessions_reused_unchanged: z.number().int().nonnegative().optional(),
+  /** Files for which a stored content fingerprint was checked (reused or rejected). */
+  sources_fingerprint_checked: z.number().int().nonnegative().optional(),
+  /** Files that changed mid-read; their incomplete read was discarded. */
+  sources_changed_during_read: z.number().int().nonnegative().optional(),
   /** Number of raw adapter records normalized before deduplication. */
   events_extracted: z.number().int().nonnegative(),
   events_rejected: z.number().int().nonnegative(),
@@ -361,6 +394,14 @@ export const MergeReportSchema = obj({
   merged_events: z.number().int().nonnegative(),
   duplicate_events: z.number().int().nonnegative(),
   conflict_events: z.number().int().nonnegative(),
+  /** Deterministic cross-device associations (native id / git object / copied session). */
+  cross_device_deterministic: z.number().int().nonnegative().optional(),
+  /** Content-based cross-device candidate groups; events are kept, not merged. */
+  cross_device_candidates: z.number().int().nonnegative().optional(),
+  /** Conflict groups that involved more than one device. */
+  cross_device_conflicts: z.number().int().nonnegative().optional(),
+  /** Canonical events backed by observations from more than one device. */
+  cross_device_merged: z.number().int().nonnegative().optional(),
   unresolved_relations: z.number().int().nonnegative(),
   schema_warnings: z.array(z.string()),
   project_identity_status: z.enum(['matched', 'weak_identity_confirmed', 'rejected']),

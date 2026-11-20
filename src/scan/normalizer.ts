@@ -110,10 +110,8 @@ export function normalizeRecord(record: AdapterRecord, ctx: NormalizeContext): A
       native_event_id: record.native_event_id,
       model: record.model,
     },
-    session_id: ctx.sessionId,
     activity: cleanedActivity,
     git,
-    provenance,
   });
 
   const dedup = computeDedupKey({
@@ -263,7 +261,6 @@ export function normalizeGitCommit(options: {
     time: event.time,
     activity: event.activity,
     git: event.git,
-    provenance: event.provenance,
   });
   const dedup = computeDedupKey({
     sourceDeviceId: options.deviceId,

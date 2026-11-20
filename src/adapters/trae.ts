@@ -61,6 +61,19 @@ export class TraeAdapter implements AgentAdapter {
     const records: ParseResult['records'] = [];
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i]!;
+      // A format change (or an unrelated JSON file) must not be turned into a
+      // fabricated "completed" event: require at least one memory field.
+      const looksLikeMemory =
+        typeof line.message_id === 'string' ||
+        typeof line.intent === 'string' ||
+        typeof line.outcome === 'string' ||
+        line.actions !== undefined ||
+        line.learned !== undefined ||
+        line.message_summary_time !== undefined;
+      if (!looksLikeMemory) {
+        issues.push({ line: i + 1, reason: 'unrecognized Trae memory record; no event emitted' });
+        continue;
+      }
       const time = parseTimestamp(line.message_summary_time);
       const intent = typeof line.intent === 'string' ? line.intent : '';
       const outcome = typeof line.outcome === 'string' ? line.outcome : '';

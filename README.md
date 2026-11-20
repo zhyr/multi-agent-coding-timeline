@@ -147,6 +147,11 @@ aitimeline scan \
 `--source-device` is mandatory: the scanner hostname is never used as the source device
 identity. Source files are read only, never modified or copied into the package.
 
+Two device identities are kept separate everywhere: `device_id` (and the report's
+`source_device_id`) is the device that owns the record, while `scanner_device_id` is the
+machine that executed the scan. A remote scan records both; it never rewrites the source
+device to the scanner hostname.
+
 ### 3. Merge (Mode C)
 
 ```bash
@@ -176,6 +181,21 @@ One self-contained HTML file: search and filters by agent, device, event type, e
 session; a provenance panel for every event; sessions, commits, sources, adapter
 verification, scan/merge warnings and preserved conflicts. No network requests, no server.
 
+### 6. Optionally run the local web app
+
+```bash
+aitimeline serve
+# http://127.0.0.1:8766
+```
+
+`serve` is not `viewer`: `viewer` writes one static HTML file, while `serve` runs a local
+application for repository discovery, scanning, browsing and export. The server binds
+`127.0.0.1` by default. A non-loopback bind is refused unless `--allow-remote` is passed, and
+remote mode always requires an access token (generated when `--auth-token` is omitted). It
+enforces a Host allowlist against DNS rebinding, same-origin checks, JSON-only state changes,
+a 1 MiB request-body limit and strict project-id validation. It never serves arbitrary files
+and never enables CORS.
+
 ## Commands
 
 | Command | Purpose |
@@ -186,6 +206,7 @@ verification, scan/merge warnings and preserved conflicts. No network requests, 
 | `inspect` | Human/JSON summary of a package |
 | `report` | Print the stored scan or merge report |
 | `viewer` | Render a package to one offline HTML file |
+| `serve` | Start the loopback-only interactive local web app |
 | `adapters` | Show the honest adapter capability matrix |
 | `version` | Show CLI, format, schema and runtime versions |
 
@@ -215,6 +236,11 @@ integrity/checksums.sha256
 `integrity/checksums.sha256` covers every generated file except itself. `validate` fails on
 any content change.
 
+Package compatibility: this release writes and reads `ai-coding-timeline` format/schema
+`1.0.0`; `validate`, `inspect`, `merge` and `viewer` reject unknown format or schema versions
+instead of guessing. Additive optional fields (for example new report counters and
+`correlation_id`) are backward compatible: packages written before they existed remain valid.
+
 ## Evidence, not assumptions
 
 Every event carries `evidence.level` — `verified`, `agent_reported`, `inferred` or
@@ -233,22 +259,27 @@ Every event carries `evidence.level` — `verified`, `agent_reported`, `inferred
   event, its source references are embedded in `provenance.paired_import_sources` and a
   content difference is explicitly flagged as `content_diverged` instead of being hidden.
 
-## Adapter status (verified 2026-11-18 on this machine)
+## Adapter status (verified 2026-11-20 on this machine)
 
-| Adapter | Verification | Sessions seen | Notes |
-| --- | --- | --- | --- |
-| `codex` | verified | 214 | JSONL + zstd, `input_text`/`output_text` bodies, `environment_context` filtered; `cwd` is a path hint so project identity is `partial`; tool calls partial |
-| `cursor` | partially verified | 2,528 | transcripts have no timestamps; SQLite metadata read-only |
-| `qoder` | verified | 4 | cwd/gitBranch/timestamps/tool blocks |
-| `trae` | partially verified | 1 | memory summaries only; all events agent-reported |
-| `workbuddy` | partially verified | 7 | security audit events, no conversation transcripts |
-| `claude-code` | not testable | 0 | no local `~/.claude/projects`; synthetic fixtures only |
-| `codebuddy` | discovery only | 0 | directory observed, no verified session format |
-| `zcode` | not testable | 0 | no local installation |
-| `opencode` | partially verified | 1 | `project/session/message/part` JSON; text parts only, no tool parts observed |
-| `al-exporter` | partially verified | 3,321 + 3 | import only: explicit `--source-root` + `manifest.json`; schema 1.0.0 and 1.1.0; 1.1.0 adds session cwd/remote, message ids and a declared device |
+Level 0 = discovery only, 1 = fixture tested, 2 = real data verified, 3 = real data plus
+boundary, incremental and error handling verified. Levels describe evidence, not ambition.
 
-Run `aitimeline adapters` for per-field capability levels.
+| Adapter | Level | Verification | Sessions seen | Notes |
+| --- | --- | --- | --- | --- |
+| `codex` | 3 | verified | 214 | JSONL + zstd, `input_text`/`output_text` bodies, `environment_context` filtered; `cwd` is a path hint so project identity is `partial`; tool calls partial |
+| `cursor` | 3 | partially verified | 2,528 | 737,261 verified `tool_use` events; transcript rows carry no timestamps (SQLite session starts do); SQLite metadata read-only |
+| `qoder` | 3 | verified | 8 | cwd/gitBranch/timestamps/tool blocks |
+| `trae` | 2 | partially verified | 1 | memory summaries only; all events agent-reported |
+| `workbuddy` | 2 | partially verified | 10 | security audit events, no conversation transcripts |
+| `claude-code` | 1 | not testable | 0 | no local `~/.claude/projects`; synthetic fixtures only |
+| `codebuddy` | 0 | discovery only | 0 | directory observed, no verified session format |
+| `zcode` | 0 | not testable | 0 | no local installation |
+| `opencode` | 2 | partially verified | 1 | `project/session/message/part` JSON; text parts only, no tool parts observed; multi-file sessions opt out of incremental reuse |
+| `al-exporter` | 2 | partially verified | 30,863 | import only: explicit `--source-root` + `manifest.json`; schema 1.0.0 and 1.1.0; 1.1.0 adds session cwd/remote, message ids and a declared device |
+
+Run `aitimeline adapters` for per-field capability levels. The same run discovered 0 real
+Claude Code sessions and no ZCode installation; those rows are fixture-only or discovery-only
+and are not claimed as supported parsers.
 
 ## Documentation
 
@@ -298,10 +329,11 @@ performed separately, read-only; the counts in the table above come from that ru
   value wins.
 - The 3-way "A+B+C" merge is the same operation as 2-way merge: it is deterministic and
   idempotent, but Git push evidence remains per-device and is never synthesized.
-- Deduplication is scoped by `dedup_key`, which includes the source device. If the same
-  session is scanned on two devices, both device-level observations are retained rather than
-  collapsed into one device-agnostic event. This preserves provenance; it is not a claim that
-  all logically identical cross-device activities were merged.
+- Events remain device-scoped. Cross-device correlation never deletes records: the same Git
+  object or native message id observed on multiple devices is folded deterministically into
+  one primary event with `provenance.observers`, while content-only matches are marked
+  `time_based_inference` / `candidate`, keep both events and carry a shared `correlation_id`.
+  Conflicting variants stay in `reports/conflicts.jsonl`.
 - Only manual runs are supported. Incremental state stores fingerprints only; unchanged
   session files are reused from the previous package, and any change forces a full re-parse.
 - Content mode `full` may include prompts and code. `metadata_only` is recommended for
@@ -403,6 +435,10 @@ aitimeline scan \
 `--source-device` 为必填项：工具绝不会用扫描机的 hostname 推断数据所属设备。源文件只读，
 不会被修改，也不会被复制进 Timeline 包。
 
+所有位置都区分两个设备身份：`device_id`（报告中的 `source_device_id`）表示记录所属的
+源设备，`scanner_device_id` 表示实际执行扫描的机器。远程扫描会同时保留两者，绝不会把
+源设备改写成扫描机。
+
 ### 3. 多设备合并（模式 C）
 
 ```bash
@@ -432,6 +468,20 @@ open ./timeline.html
 每个事件都有来源面板；同时展示会话、提交、数据源、适配器验证状态、扫描/合并告警，以及
 被保留的冲突记录。不发起任何网络请求，也不需要启动服务。
 
+### 6. 可选：启动本地 Web 应用
+
+```bash
+aitimeline serve
+# http://127.0.0.1:8766
+```
+
+`serve` 与 `viewer` 不同：`viewer` 只生成一个静态 HTML 文件，`serve` 运行一个用于仓库
+发现、扫描、浏览和导出的本地应用。服务默认绑定 `127.0.0.1`；除非显式传入
+`--allow-remote`，否则拒绝绑定非 Loopback 地址，且远程模式始终要求访问令牌（未提供
+`--auth-token` 时自动生成）。服务会校验 Host 允许列表以防 DNS Rebinding、检查同源、
+只接受 JSON 状态变更、限制请求体为 1 MiB，并严格校验 Project ID。它不会提供任意文件
+读取，也不会开启 CORS。
+
 ## 命令一览
 
 | 命令 | 用途 |
@@ -442,6 +492,7 @@ open ./timeline.html
 | `inspect` | 以人类可读或 JSON 形式输出包的摘要 |
 | `report` | 打印包内保存的扫描报告或合并报告 |
 | `viewer` | 把包渲染成一个离线 HTML 文件 |
+| `serve` | 启动仅绑定 Loopback 的交互式本地 Web 应用 |
 | `adapters` | 展示真实的适配器能力矩阵 |
 | `version` | 显示 CLI、格式、Schema 与运行时版本 |
 
@@ -471,6 +522,10 @@ integrity/checksums.sha256
 `integrity/checksums.sha256` 覆盖除自身以外的所有生成文件；任何内容改动都会让
 `validate` 失败。
 
+包兼容性：本版本读写的 `ai-coding-timeline` 格式/Schema 均为 `1.0.0`；`validate`、
+`inspect`、`merge` 与 `viewer` 遇到未知格式或 Schema 版本会直接拒绝，不做猜测。新增的
+可选字段（例如报告计数器与 `correlation_id`）向后兼容：旧版本写出的包仍然有效。
+
 ## 以证据为准，不做假设
 
 每个事件都带有 `evidence.level`（`verified`、`agent_reported`、`inferred` 或 `unknown`），
@@ -487,22 +542,26 @@ integrity/checksums.sha256
   `reports/conflicts.jsonl`。导入记录被折叠进原生事件时，其来源引用会嵌入
   `provenance.paired_import_sources`；内容差异用 `content_diverged` 显式标注。
 
-## 适配器状态（2026-11-18 在本机实测）
+## 适配器状态（2026-11-20 在本机实测）
 
-| 适配器 | 验证状态 | 实测会话数 | 说明 |
-| --- | --- | --- | --- |
-| `codex` | verified | 214 | JSONL + zstd，解析 `input_text`/`output_text` 正文并过滤 `<environment_context>`；`cwd` 只是路径线索，项目识别为部分支持；工具调用部分支持 |
-| `cursor` | partially verified | 2,528 | 转录记录无时间戳；SQLite 元数据只读 |
-| `qoder` | verified | 4 | 提供 cwd/gitBranch/时间戳/工具块 |
-| `trae` | partially verified | 1 | 仅有记忆摘要；全部事件为 agent-reported |
-| `workbuddy` | partially verified | 7 | 安全审计事件，无对话转录 |
-| `claude-code` | not testable | 0 | 本机无 `~/.claude/projects`，仅用合成样本测试 |
-| `codebuddy` | discovery only | 0 | 只观察到目录，未验证会话格式 |
-| `zcode` | not testable | 0 | 本机未安装 |
-| `opencode` | partially verified | 1 | `project/session/message/part` JSON；仅观察到 text part，未观察到工具调用 |
-| `al-exporter` | partially verified | 3,321 + 3 | 仅导入：必须显式 `--source-root` + `manifest.json`；兼容 schema 1.0.0/1.1.0；1.1.0 提供 session cwd/remote、消息 id 与声明的设备 |
+等级 0 = 仅目录发现，1 = 合成样本验证，2 = 真实数据验证，3 = 真实数据 + 边界、增量与
+异常处理验证。等级表示证据强度，不代表规划。
 
-字段级能力等级可运行 `aitimeline adapters` 查看。
+| 适配器 | 等级 | 验证状态 | 实测会话数 | 说明 |
+| --- | --- | --- | --- | --- |
+| `codex` | 3 | verified | 214 | JSONL + zstd，解析 `input_text`/`output_text` 正文并过滤 `<environment_context>`；`cwd` 只是路径线索，项目识别为部分支持；工具调用部分支持 |
+| `cursor` | 3 | partially verified | 2,528 | 实测 737,261 条已验证的 `tool_use` 事件；转录记录无时间戳（SQLite 会话开始记录有时间戳）；SQLite 元数据只读 |
+| `qoder` | 3 | verified | 8 | 提供 cwd/gitBranch/时间戳/工具块 |
+| `trae` | 2 | partially verified | 1 | 仅有记忆摘要；全部事件为 agent-reported |
+| `workbuddy` | 2 | partially verified | 10 | 安全审计事件，无对话转录 |
+| `claude-code` | 1 | not testable | 0 | 本机无 `~/.claude/projects`，仅用合成样本测试 |
+| `codebuddy` | 0 | discovery only | 0 | 只观察到目录，未验证会话格式 |
+| `zcode` | 0 | not testable | 0 | 本机未安装 |
+| `opencode` | 2 | partially verified | 1 | `project/session/message/part` JSON；仅观察到 text part，未观察到工具调用；多文件会话不参与增量复用 |
+| `al-exporter` | 2 | partially verified | 30,863 | 仅导入：必须显式 `--source-root` + `manifest.json`；兼容 schema 1.0.0/1.1.0；1.1.0 提供 session cwd/remote、消息 id 与声明的设备 |
+
+字段级能力等级可运行 `aitimeline adapters` 查看。同一次实测发现 0 个真实 Claude Code
+会话，且本机未安装 ZCode；这两行分别只是合成样本与目录发现，不宣称解析支持。
 
 ## 文档
 
@@ -544,6 +603,10 @@ npm run verify      # typecheck + 测试 + 构建
   `manifest.device.source_device_id`；两者冲突时会报告，并以显式 CLI 值为准。
 - “A+B+C” 三方合并与两方合并是同一套操作：结果确定且幂等；但 Git 推送证据始终按设备
   独立记录，不会被合成。
+- 事件始终按设备保留。跨设备关联从不删除记录：同一 Git 对象或原生消息 id 在多台设备被
+  观察时，会确定性地折叠为一个主事件并在 `provenance.observers` 中保留观察设备；仅内容
+  相似的匹配标记为 `time_based_inference` / `candidate`，两条事件都保留并共享
+  `correlation_id`。冲突变体保存在 `reports/conflicts.jsonl`。
 - 仅支持手动执行。增量状态只保存文件指纹：未变化的会话文件复用上一次包中的结果，一旦
   文件变化则重新完整解析。
 - `full` 内容模式可能包含提示词和代码；任何要离开本机的包建议使用 `metadata_only`。
