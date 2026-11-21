@@ -148,6 +148,17 @@ export interface DiscoverOptions {
 }
 
 /**
+ * Extra package files an adapter can contribute after parsing (for example a
+ * Cursor composer index and its reconciliation audit). Paths are restricted to
+ * `sources/<file>` or `reports/<file>` by the package writer.
+ */
+export interface SupplementalFile {
+  path: string;
+  format: 'json' | 'jsonl';
+  content: unknown;
+}
+
+/**
  * Stable adapter contract. `parseSession` returns a ParseResult rather than a
  * bare array so malformed/truncated records are reported, never silently
  * dropped. Returned records are adapter-neutral but NOT yet normalized; the
@@ -166,6 +177,8 @@ export interface AgentAdapter {
    * explicit; the engine decides how it interacts with --source-device.
    */
   declaredSourceDevice?(source: AgentSource): Promise<DeclaredSourceDevice | undefined>;
+  /** Optional extra package files (indexes/audits) produced while parsing. */
+  supplementalFiles?(): SupplementalFile[];
 }
 
 export function makeCapabilities(

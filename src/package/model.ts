@@ -15,6 +15,7 @@ import type {
   TimelineDevice,
   TimelineProject,
 } from '../schema/entities.js';
+import type { SupplementalFile } from '../adapters/types.js';
 
 /** In-memory representation of a Timeline Package. All collections are arrays; JSONL on disk. */
 export interface TimelineData {
@@ -33,6 +34,8 @@ export interface TimelineData {
   scanReport?: ScanReport;
   mergeReport?: MergeReport;
   conflicts: ConflictRecord[];
+  /** Adapter-contributed package files (indexes, per-agent audit reports). */
+  supplemental?: SupplementalFile[];
 }
 
 export function emptyTimeline(): TimelineData {

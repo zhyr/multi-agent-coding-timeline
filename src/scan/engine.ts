@@ -692,6 +692,8 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
     `Parsed ${report.sources_scanned} source file(s), ${report.sessions_matched} session(s) matched, ` +
       `${report.sessions_reused_unchanged} reused, ${report.sessions_candidates_included} candidate(s) explicitly included`,
   );
+  // Adapter-contributed indexes/audits (for example the Cursor composer index).
+  const supplemental = adapters.flatMap((adapter) => adapter.supplementalFiles?.() ?? []);
 
   // ---- Read-only Git scan ----
   const git = await scanGit({ projectPath, projectId, deviceId: sourceDeviceId, maxCommits: options.maxCommits });
@@ -860,6 +862,7 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
   data.scanInputs = scanInputs;
   data.scanReport = report;
   data.conflicts = dedup.conflicts;
+  if (supplemental.length > 0) data.supplemental = supplemental;
 
   const validation = validateData(data);
   if (!validation.ok) {

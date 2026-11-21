@@ -279,10 +279,14 @@ export function decodeProjectPath(encoded: string): string {
  */
 export async function openReadOnlySqlite(file: string): Promise<SqliteLike | null> {
   try {
-    const mod = (await import('node:sqlite')) as unknown as {
+    // Resolve the prefix-only builtin through `process` so bundlers and test
+    // runners never try to resolve a bare `sqlite` package. Fall back to a
+    // literal dynamic import for runtimes without `getBuiltinModule`.
+    const mod = ((process.getBuiltinModule?.('node:sqlite') ??
+      (await import(/* @vite-ignore */ 'node:sqlite'))) as unknown) as {
       DatabaseSync?: new (p: string, o: { readOnly: boolean }) => SqliteLike;
     };
-    if (!mod.DatabaseSync) return null;
+    if (!mod?.DatabaseSync) return null;
     const db = new mod.DatabaseSync(file, { readOnly: true });
     db.exec?.('PRAGMA query_only = ON');
     return db;
@@ -303,9 +307,10 @@ export function safeSqliteRows(
   db: SqliteLike,
   sql: string,
   onError?: (message: string) => void,
+  params: unknown[] = [],
 ): Array<Record<string, unknown>> {
   try {
-    return db.prepare(sql).all();
+    return db.prepare(sql).all(...params);
   } catch (error) {
     onError?.((error as Error).message);
     return [];

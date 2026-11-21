@@ -227,8 +227,10 @@ git/commits.jsonl
 git/pushes.jsonl
 sources/source-index.jsonl
 sources/scan-inputs.json        # present for scans
+sources/cursor-composer-index.jsonl  # present when a modern Cursor global DB is scanned
 reports/scan-report.json        # present for scans
 reports/merge-report.json       # present for merges
+reports/cursor-audit.json       # present when a modern Cursor global DB is scanned
 reports/conflicts.jsonl
 integrity/checksums.sha256
 ```
@@ -267,7 +269,7 @@ boundary, incremental and error handling verified. Levels describe evidence, not
 | Adapter | Level | Verification | Sessions seen | Notes |
 | --- | --- | --- | --- | --- |
 | `codex` | 3 | verified | 214 | JSONL + zstd, `input_text`/`output_text` bodies, `environment_context` filtered; `cwd` is a path hint so project identity is `partial`; tool calls partial |
-| `cursor` | 3 | partially verified | 2,528 | 737,261 verified `tool_use` events; transcript rows carry no timestamps (SQLite session starts do); SQLite metadata read-only |
+| `cursor` | 3 | partially verified | 2,528 | 737,261 verified `tool_use` events; transcript rows carry no timestamps (SQLite session starts do); modern desktop Composer bodies are read read-only from `globalStorage/state.vscdb` with a per-composer index and audit report; `agentKv` artifacts are inventoried, not copied |
 | `qoder` | 3 | verified | 8 | cwd/gitBranch/timestamps/tool blocks |
 | `trae` | 2 | partially verified | 1 | memory summaries only; all events agent-reported |
 | `workbuddy` | 2 | partially verified | 10 | security audit events, no conversation transcripts |
@@ -513,8 +515,10 @@ git/commits.jsonl
 git/pushes.jsonl
 sources/source-index.jsonl
 sources/scan-inputs.json        # 扫描产物中存在
+sources/cursor-composer-index.jsonl  # 扫描到现代 Cursor 全局库时存在
 reports/scan-report.json        # 扫描产物中存在
 reports/merge-report.json       # 合并产物中存在
+reports/cursor-audit.json       # 扫描到现代 Cursor 全局库时存在
 reports/conflicts.jsonl
 integrity/checksums.sha256
 ```
@@ -550,7 +554,7 @@ integrity/checksums.sha256
 | 适配器 | 等级 | 验证状态 | 实测会话数 | 说明 |
 | --- | --- | --- | --- | --- |
 | `codex` | 3 | verified | 214 | JSONL + zstd，解析 `input_text`/`output_text` 正文并过滤 `<environment_context>`；`cwd` 只是路径线索，项目识别为部分支持；工具调用部分支持 |
-| `cursor` | 3 | partially verified | 2,528 | 实测 737,261 条已验证的 `tool_use` 事件；转录记录无时间戳（SQLite 会话开始记录有时间戳）；SQLite 元数据只读 |
+| `cursor` | 3 | partially verified | 2,528 | 实测 737,261 条已验证的 `tool_use` 事件；转录记录无时间戳（SQLite 会话开始记录有时间戳）；现代桌面 Composer 正文从 `globalStorage/state.vscdb` 只读解析，并生成逐 Composer 索引与审计报告；`agentKv` 产物只盘点、不复制 |
 | `qoder` | 3 | verified | 8 | 提供 cwd/gitBranch/时间戳/工具块 |
 | `trae` | 2 | partially verified | 1 | 仅有记忆摘要；全部事件为 agent-reported |
 | `workbuddy` | 2 | partially verified | 10 | 安全审计事件，无对话转录 |

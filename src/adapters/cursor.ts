@@ -17,7 +17,15 @@ import {
   type ParseResult,
   type ProjectEvidence,
   type SessionReference,
+  type SupplementalFile,
 } from './types.js';
+import {
+  buildCursorSupplemental,
+  listCursorGlobalComposers,
+  parseCursorComposer,
+  type CursorAuditDatabase,
+  type CursorIndexRow,
+} from './cursor-global.js';
 
 /**
  * Cursor. Verified against local data (2026-11-17):
@@ -124,7 +132,19 @@ function formatToolInput(input: unknown): string | undefined {
 export class CursorAdapter implements AgentAdapter {
   readonly id = 'cursor';
   readonly name = 'Cursor';
-  readonly version = '1.0.0';
+  readonly version = '1.1.0';
+
+  /** Composer index rows keyed by `${dbPath}\u0000${composerId}`. */
+  private globalIndex = new Map<string, CursorIndexRow>();
+  /** Per-database audit seeds (schema, namespaces, counts). */
+  private globalAudit: CursorAuditDatabase[] = [];
+  /** Transcript session UUIDs observed during this scan, for composer alignment. */
+  private transcriptIds = new Set<string>();
+  private seenGlobalDbs = new Set<string>();
+
+  private indexKey(dbPath: string, composerId: string): string {
+    return `${dbPath}\u0000${composerId}`;
+  }
 
   async discoverSources(options: DiscoverOptions = {}): Promise<AgentSource[]> {
     return discoverSources(SPEC, options);
@@ -137,16 +157,43 @@ export class CursorAdapter implements AgentAdapter {
       evidence: transcriptEvidence,
       maxDepth: 7,
     });
+    for (const session of jsonl.sessions) {
+      if (session.relative_path.includes('agent-transcripts')) {
+        this.transcriptIds.add(session.native_session_id.toLowerCase());
+      }
+    }
     const metadata = await scanJsonlSessions(source, {
       predicate: (r) => /\.(db|vscdb|sqlite|sqlite3)$/.test(r),
       nativeId: (r) => r.split('/').pop() ?? r,
       maxDepth: 3,
     });
+
+    const composerSessions: SessionReference[] = [];
+    const legacySessions: SessionReference[] = [];
     for (const session of metadata.sessions) {
+      if (this.seenGlobalDbs.has(session.path)) continue;
+      const listing = await listCursorGlobalComposers(
+        source,
+        session.path,
+        session.relative_path,
+        this.transcriptIds,
+      );
+      if (!listing.available) {
+        legacySessions.push(session);
+        continue;
+      }
+      this.seenGlobalDbs.add(session.path);
+      this.globalAudit.push(listing.audit);
+      composerSessions.push(...listing.sessions);
+      for (const entry of listing.index) {
+        this.globalIndex.set(this.indexKey(session.path, entry.composer_id), entry);
+      }
+    }
+    for (const session of legacySessions) {
       session.metadata = { ...session.metadata, kind: 'sqlite-metadata' };
       session.project_evidence = { metadata: { source: 'cursor-sqlite' } };
     }
-    return [...jsonl.sessions, ...metadata.sessions];
+    return [...jsonl.sessions, ...legacySessions, ...composerSessions];
   }
 
   private async parseTranscript(session: SessionReference): Promise<ParseResult> {
@@ -235,11 +282,13 @@ export class CursorAdapter implements AgentAdapter {
     }
     const records: ParseResult['records'] = [];
     let sequence = 0;
+    let unreadable = false;
     try {
       const tables = new Set(
-        safeSqliteRows(db, "SELECT name FROM sqlite_master WHERE type='table'", (m) =>
-          issues.push({ line: 0, reason: `schema query failed: ${m}` }),
-        ).map((r) => String(r.name)),
+        safeSqliteRows(db, "SELECT name FROM sqlite_master WHERE type='table'", (m) => {
+          unreadable = true;
+          issues.push({ line: 0, reason: `schema query failed: ${m}` });
+        }).map((r) => String(r.name)),
       );
 
       if (tables.has('conversation_summaries')) {
@@ -295,14 +344,53 @@ export class CursorAdapter implements AgentAdapter {
     } finally {
       db.close();
     }
-    return { records, issues, truncated: false };
+    return { records, issues, truncated: unreadable };
   }
 
   async parseSession(session: SessionReference): Promise<ParseResult> {
+    if (session.metadata?.kind === 'cursor-global-composer') {
+      const result = await parseCursorComposer(session);
+      const dbPath = String(session.metadata?.cursor_db_path ?? '');
+      const composerId = String(session.metadata?.composer_id ?? session.native_session_id);
+      const entry = this.globalIndex.get(this.indexKey(dbPath, composerId));
+      const stats = (result as ParseResult & {
+        cursor_composer_stats?: Partial<CursorIndexRow>;
+      }).cursor_composer_stats;
+      if (entry && stats) {
+        entry.message_count = Number(stats.message_count ?? 0);
+        entry.user_message_count = Number(stats.user_message_count ?? 0);
+        entry.assistant_message_count = Number(stats.assistant_message_count ?? 0);
+        entry.tool_calls = Number(stats.tool_calls ?? 0);
+        entry.thinking_blocks = Number(stats.thinking_blocks ?? 0);
+        entry.code_block_refs = Number(stats.code_block_refs ?? 0);
+        entry.missing_bubbles = Number(stats.missing_bubbles ?? 0);
+        entry.missing_bubble_ids_sample = Array.isArray(stats.missing_bubble_ids_sample)
+          ? (stats.missing_bubble_ids_sample as string[])
+          : [];
+        entry.unparsable_bubbles = Number(stats.unparsable_bubbles ?? 0);
+        entry.empty_bubbles = Number(stats.empty_bubbles ?? 0);
+        entry.status = (stats.status as CursorIndexRow['status']) ?? entry.status;
+      }
+      if (entry) entry.transcript_match = this.transcriptIds.has(composerId.toLowerCase());
+      return result;
+    }
     if (/\.(db|vscdb|sqlite|sqlite3)$/.test(path.basename(session.path))) {
       return this.parseSqlite(session);
     }
     return this.parseTranscript(session);
+  }
+
+  supplementalFiles(): SupplementalFile[] {
+    if (this.globalAudit.length === 0) return [];
+    const index = [...this.globalIndex.values()];
+    for (const row of index) {
+      row.transcript_match = this.transcriptIds.has(row.composer_id.toLowerCase());
+    }
+    return buildCursorSupplemental({
+      index,
+      databases: this.globalAudit,
+      transcriptIds: this.transcriptIds,
+    });
   }
 
   getCapabilities(): AdapterCapabilities {
@@ -327,9 +415,14 @@ export class CursorAdapter implements AgentAdapter {
         'Each tool_use block becomes a separate agent.tool.started event with tool_name and its JSON input as content; evidence remains verified because the block was read directly from the transcript.',
         'User @file references are extracted into context_refs while the original user text is preserved verbatim.',
         'Transcript records contain no timestamp; events keep occurred_at empty and fall back to observed_at for sorting.',
-        'SQLite is opened with node:sqlite readOnly + PRAGMA query_only; WAL is read in place, never copied.',
-        'Only conversation_summaries and composerHeaders columns are read. scored_commits / tracked_file_content are intentionally not parsed because Git Scanner is the authoritative commit source.',
-        'No standalone thinking/reasoning blocks or LLM request payloads exist in the observed transcript format; they are NOT synthesized. ai_request stays unavailable.',
+        'Modern desktop Composer: <userData>/globalStorage/state.vscdb is read through composerHeaders + cursorDiskKV. Each composer becomes its own session and is rebuilt in Cursor order (fullConversationHeadersOnly → conversationMap → bubbleId rows).',
+        'Composer bubbles yield user/assistant text, thinking blocks, toolFormerData call/result pairs, and code-block file references. Timestamps come from the bubble/composer record and are millisecond precision.',
+        'Subagent composers (task-*, subagentInfo.parentComposerId) keep parent linkage; the session index and audit are written to sources/cursor-composer-index.jsonl and reports/cursor-audit.json.',
+        'agentKv blob/artifact/checkpoint payloads are inventoried (counts, bytes) and referenced by key; raw KV bytes are not copied into the package and binary artifacts are never synthesized as text.',
+        'Desktop composer ids and agent transcript session ids are independent namespaces. Audit alignment reports matches; absence of a match is not proof of missing data.',
+        'SQLite is opened with node:sqlite readOnly + PRAGMA query_only; WAL is read in place. Composer sessions opt out of incremental reuse because hashing the shared multi-GB DB cannot prove one composer unchanged.',
+        'Only conversation_summaries and Cursor global Composer tables are read. scored_commits / tracked_file_content are intentionally not parsed because Git Scanner is the authoritative commit source.',
+        'No standalone LLM request payloads exist in the observed formats; they are NOT synthesized. ai_request stays unavailable.',
         'Database summaries are agent_reported metadata, not verified execution traces.',
       ],
     });

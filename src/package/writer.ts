@@ -115,6 +115,24 @@ export async function writePackage(
   if (data.mergeReport) await json('reports/merge-report.json', data.mergeReport);
   await jsonl('reports/conflicts.jsonl', data.conflicts);
 
+  // Adapter-contributed files (Cursor composer index, per-agent audit). Paths
+  // are constrained to sources/ or reports/ so an adapter can never write into
+  // git/, integrity/ or outside the package.
+  for (const extra of data.supplemental ?? []) {
+    const relative = extra.path.replace(/\\/g, '/');
+    if (!/^(sources|reports)\/[A-Za-z0-9][A-Za-z0-9._-]*$/.test(relative)) {
+      throw new IoError(`Adapter supplemental file path is not allowed: ${extra.path}`);
+    }
+    if (extra.format === 'jsonl') {
+      if (!Array.isArray(extra.content)) {
+        throw new IoError(`Adapter supplemental JSONL file must be an array: ${extra.path}`);
+      }
+      await jsonl(relative, extra.content);
+    } else {
+      await json(relative, extra.content);
+    }
+  }
+
   const computed = await computeChecksums(absolute);
   const checksums = await writeChecksums(absolute, computed);
   files.push('integrity/checksums.sha256');
