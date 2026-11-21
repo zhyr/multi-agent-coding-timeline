@@ -265,7 +265,7 @@ Every event carries `evidence.level` — `verified`, `agent_reported`, `inferred
   event, its source references are embedded in `provenance.paired_import_sources` and a
   content difference is explicitly flagged as `content_diverged` instead of being hidden.
 
-## Adapter status (verified 2026-11-20 on this machine)
+## Adapter status (verified 2026-11-21 on this machine)
 
 Level 0 = discovery only, 1 = fixture tested, 2 = real data verified, 3 = real data plus
 boundary, incremental and error handling verified. Levels describe evidence, not ambition.
@@ -561,7 +561,7 @@ integrity/checksums.sha256
   `reports/conflicts.jsonl`。导入记录被折叠进原生事件时，其来源引用会嵌入
   `provenance.paired_import_sources`；内容差异用 `content_diverged` 显式标注。
 
-## 适配器状态（2026-11-20 在本机实测）
+## 适配器状态（2026-11-21 在本机实测）
 
 等级 0 = 仅目录发现，1 = 合成样本验证，2 = 真实数据验证，3 = 真实数据 + 边界、增量与
 异常处理验证。等级表示证据强度，不代表规划。

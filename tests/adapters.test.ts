@@ -398,7 +398,7 @@ describe('WorkBuddy / TRAE adapters (partial formats)', () => {
   it('discovers Trae CN memory summaries and strips the CN partition suffix', async () => {
     const cnRoot = await tempDir('aitimeline-trae-cn-');
     const relative =
-      'memory/projects/-Users-zhyr-work-DocCraft--p2-6d3ef11d408351d3a4bc/20261107/session_memory_cn.jsonl';
+      'memory/projects/-Users-alice-work-DocCraft--p2-6d3ef11d408351d3a4bc/20261107/session_memory_cn.jsonl';
     await writeTraeMemory(path.join(cnRoot, relative));
     const adapter = new TraeAdapter();
     const sessions = await adapter.scanSessions({
@@ -407,11 +407,11 @@ describe('WorkBuddy / TRAE adapters (partial formats)', () => {
       root: cnRoot,
     });
     expect(sessions).toHaveLength(1);
-    expect(sessions[0]!.project_evidence.projectPathHints).toEqual(['/Users/zhyr/work/DocCraft']);
+    expect(sessions[0]!.project_evidence.projectPathHints).toEqual(['/Users/alice/work/DocCraft']);
     const result = await adapter.parseSession(sessions[0]!);
     expect(result.records).toHaveLength(1);
     expect(result.records[0]!.evidence_level).toBe('agent_reported');
-    expect(result.project_evidence?.projectPathHints).toEqual(['/Users/zhyr/work/DocCraft']);
+    expect(result.project_evidence?.projectPathHints).toEqual(['/Users/alice/work/DocCraft']);
   });
 
   it('groups Antigravity brain artifacts per conversation and parses agent-reported completion', async () => {
@@ -576,19 +576,19 @@ describe('Adapter conformance: empty, corrupt and format drift', () => {
 
   it('Claude Code: multi-turn timestamps, tool use/result, model and cwd evidence', async () => {
     const claudeRoot = await tempDir('aitimeline-claude-');
-    const relative = 'projects/Users-zhyr-proj/session-1.jsonl';
+    const relative = 'projects/Users-alice-proj/session-1.jsonl';
     await mkdir(path.dirname(path.join(claudeRoot, relative)), { recursive: true });
     await writeJsonl(path.join(claudeRoot, relative), [
-      { type: 'user', uuid: 'u1', cwd: '/Users/zhyr/proj', timestamp: '2026-11-17T05:00:00.000Z', message: { role: 'user', content: 'question' } },
+      { type: 'user', uuid: 'u1', cwd: '/Users/alice/proj', timestamp: '2026-11-17T05:00:00.000Z', message: { role: 'user', content: 'question' } },
       {
-        type: 'assistant', uuid: 'a1', cwd: '/Users/zhyr/proj', timestamp: '2026-11-17T05:00:02.000Z',
+        type: 'assistant', uuid: 'a1', cwd: '/Users/alice/proj', timestamp: '2026-11-17T05:00:02.000Z',
         message: { role: 'assistant', model: 'claude-sonnet', content: [
           { type: 'text', text: 'answer' },
           { type: 'tool_use', id: 'tu-1', name: 'Read', input: { file_path: 'src/a.ts' } },
         ] },
       },
       {
-        type: 'user', uuid: 'u2', cwd: '/Users/zhyr/proj', timestamp: '2026-11-17T05:00:03.000Z',
+        type: 'user', uuid: 'u2', cwd: '/Users/alice/proj', timestamp: '2026-11-17T05:00:03.000Z',
         message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu-1', content: 'ok' }] },
       },
     ]);
@@ -596,7 +596,7 @@ describe('Adapter conformance: empty, corrupt and format drift', () => {
     const source: AgentSource = { ...sourceFor('claude-code'), root: claudeRoot, display_path: claudeRoot };
     const sessions = await adapter.scanSessions(source);
     expect(sessions).toHaveLength(1);
-    expect(sessions[0]!.project_evidence.projectPathHints?.[0]).toBe('/Users/zhyr/proj');
+    expect(sessions[0]!.project_evidence.projectPathHints?.[0]).toBe('/Users/alice/proj');
     const result = await adapter.parseSession(sessions[0]!);
     expect(result.session_started_at).toBe('2026-11-17T05:00:00.000Z');
     expect(result.session_ended_at).toBe('2026-11-17T05:00:03.000Z');
