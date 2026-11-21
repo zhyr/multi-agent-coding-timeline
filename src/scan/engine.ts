@@ -19,6 +19,7 @@ import {
   syntheticAdapter,
 } from './normalizer.js';
 import { deduplicateEvents } from '../merge/dedup.js';
+import { collectUnsupportedInventory } from './unsupported-inventory.js';
 import { readPackage, writePackage } from '../package/index.js';
 import { validateData } from '../package/validate.js';
 import { emptyTimeline, type TimelineData } from '../package/model.js';
@@ -694,6 +695,17 @@ export async function runScan(options: ScanOptions): Promise<ScanOutcome> {
   );
   // Adapter-contributed indexes/audits (for example the Cursor composer index).
   const supplemental = adapters.flatMap((adapter) => adapter.supplementalFiles?.() ?? []);
+  // Data formats that were found but deliberately not parsed (encrypted
+  // Antigravity protocol buffers, Trae SOLO databases, CodeBuddy memory notes).
+  const rootsByAgent: Record<string, string[]> = {};
+  for (const { adapter, source } of usable) {
+    (rootsByAgent[adapter.id] ??= []).push(source.root);
+  }
+  const inventory = await collectUnsupportedInventory({
+    agentIds: adapters.map((adapter) => adapter.id),
+    rootsByAgent,
+  });
+  if (inventory) supplemental.push(inventory);
 
   // ---- Read-only Git scan ----
   const git = await scanGit({ projectPath, projectId, deviceId: sourceDeviceId, maxCommits: options.maxCommits });

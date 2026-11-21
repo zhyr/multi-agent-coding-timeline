@@ -201,6 +201,58 @@ export async function writeTraeMemory(target: string): Promise<void> {
   ]);
 }
 
+/**
+ * Synthetic Antigravity brain directory: one conversation with task, plan and
+ * walkthrough artifacts plus a resolved revision, and a second conversation
+ * with only a task artifact.
+ */
+export async function writeAntigravityBrain(root: string): Promise<string> {
+  const first = path.join(root, 'brain/11111111-1111-4111-8111-111111111111');
+  await mkdir(first, { recursive: true });
+  await writeFile(path.join(first, 'task.md'), '# Task\n\n- [x] Read the source\n- [ ] Write the report\n');
+  await writeFile(
+    path.join(first, 'task.md.metadata.json'),
+    JSON.stringify({
+      artifactType: 'ARTIFACT_TYPE_TASK',
+      summary: 'Checklist for the fixture task.',
+      updatedAt: '2026-03-25T11:34:09.042989Z',
+    }),
+  );
+  await writeFile(path.join(first, 'task.md.resolved'), '# Task\n\n- [x] Read the source\n');
+  await writeFile(
+    path.join(first, 'implementation_plan.md'),
+    '# Plan\n\n1. Inspect the repository.\n2. Apply the change.\n',
+  );
+  await writeFile(
+    path.join(first, 'implementation_plan.md.metadata.json'),
+    JSON.stringify({
+      artifactType: 'ARTIFACT_TYPE_IMPLEMENTATION_PLAN',
+      summary: 'Plan for the fixture task.',
+      updatedAt: '2026-03-25T11:34:25.433272Z',
+    }),
+  );
+  await writeFile(
+    path.join(first, 'walkthrough.md'),
+    '# Walkthrough\n\nThe change is complete and tests pass.\n',
+  );
+  await writeFile(
+    path.join(first, 'walkthrough.md.metadata.json'),
+    JSON.stringify({
+      artifactType: 'ARTIFACT_TYPE_WALKTHROUGH',
+      summary: 'Completion walkthrough.',
+      updatedAt: '2026-03-25T11:35:00.000000Z',
+    }),
+  );
+  await writeFile(
+    path.join(first, 'walkthrough.md.resolved'),
+    '# Walkthrough\n\nThe change is in progress.\n',
+  );
+  const second = path.join(root, 'brain/22222222-2222-4222-8222-222222222222');
+  await mkdir(second, { recursive: true });
+  await writeFile(path.join(second, 'task.md'), '# Task\n\n- [ ] Only a task artifact\n');
+  return first;
+}
+
 /** Wrap a real adapter so discovery points at a synthetic fixture root (no home directory access). */
 export function fixtureAdapter(adapter: AgentAdapter, root: string): AgentAdapter {
   const source: AgentSource = {

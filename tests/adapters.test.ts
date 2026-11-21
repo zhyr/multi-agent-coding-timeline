@@ -8,6 +8,7 @@ import { ClaudeCodeAdapter } from '../src/adapters/claude-code.js';
 import { CursorAdapter } from '../src/adapters/cursor.js';
 import { WorkBuddyAdapter } from '../src/adapters/workbuddy.js';
 import { TraeAdapter } from '../src/adapters/trae.js';
+import { AntigravityAdapter } from '../src/adapters/antigravity.js';
 import { CodeBuddyAdapter, ZCodeAdapter } from '../src/adapters/limited-adapters.js';
 import { OpenCodeAdapter } from '../src/adapters/opencode.js';
 import { summarizeAdapters } from '../src/adapters/registry.js';
@@ -21,6 +22,7 @@ import {
   writeWorkBuddyAudit,
   writeWorkBuddyTranscript,
   writeTraeMemory,
+  writeAntigravityBrain,
   writeJsonl,
 } from './helpers/fixtures.js';
 
@@ -410,6 +412,47 @@ describe('WorkBuddy / TRAE adapters (partial formats)', () => {
     expect(result.records).toHaveLength(1);
     expect(result.records[0]!.evidence_level).toBe('agent_reported');
     expect(result.project_evidence?.projectPathHints).toEqual(['/Users/zhyr/work/DocCraft']);
+  });
+
+  it('groups Antigravity brain artifacts per conversation and parses agent-reported completion', async () => {
+    const brainRoot = await tempDir('aitimeline-antigravity-');
+    await writeAntigravityBrain(brainRoot);
+    const source: AgentSource = {
+      ...sourceFor('antigravity'),
+      source_id: 'antigravity-fixture',
+      root: brainRoot,
+      format: 'markdown',
+    };
+    const adapter = new AntigravityAdapter();
+    const sessions = await adapter.scanSessions(source);
+    expect(sessions.map((s) => s.native_session_id)).toEqual([
+      '11111111-1111-4111-8111-111111111111',
+      '22222222-2222-4222-8222-222222222222',
+    ]);
+    expect((sessions[0]!.metadata?.artifacts as string[])).toEqual([
+      'brain/11111111-1111-4111-8111-111111111111/implementation_plan.md',
+      'brain/11111111-1111-4111-8111-111111111111/task.md',
+      'brain/11111111-1111-4111-8111-111111111111/walkthrough.md',
+    ]);
+
+    const result = await adapter.parseSession(sessions[0]!);
+    expect(result.issues).toEqual([]);
+    expect(result.records.map((r) => [r.event_type, r.raw_type])).toEqual([
+      ['agent.message.recorded', 'antigravity_task'],
+      ['agent.message.recorded', 'antigravity_implementation_plan'],
+      ['agent.execution.completed', 'antigravity_walkthrough'],
+    ]);
+    expect(result.records.every((r) => r.evidence_level === 'agent_reported')).toBe(true);
+    expect(result.records[2]!.execution_status).toBe('reported_walkthrough');
+    expect(result.records[2]!.occurred_at).toBe('2026-03-25T11:35:00.000Z');
+    expect(result.records[0]!.metadata?.resolved_revisions).toBe('1');
+    expect(result.session_started_at).toBe('2026-03-25T11:34:09.042Z');
+    expect(result.session_ended_at).toBe('2026-03-25T11:35:00.000Z');
+
+    const capabilities = adapter.getCapabilities();
+    expect(capabilities.verification).toBe('partially_verified');
+    expect(capabilities.agent_response).toBe('unavailable');
+    expect(capabilities.notes.some((note) => note.includes('unsupported-inventory.json'))).toBe(true);
   });
 
   it('parses WorkBuddy conversation transcripts with reasoning, tools and cwd', async () => {

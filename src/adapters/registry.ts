@@ -4,6 +4,7 @@ import { CursorAdapter } from './cursor.js';
 import { QoderAdapter } from './qoder.js';
 import { WorkBuddyAdapter } from './workbuddy.js';
 import { TraeAdapter } from './trae.js';
+import { AntigravityAdapter } from './antigravity.js';
 import { CodeBuddyAdapter, ZCodeAdapter } from './limited-adapters.js';
 import { OpenCodeAdapter } from './opencode.js';
 import { AlExporterAdapter } from './al-exporter.js';
@@ -19,6 +20,7 @@ export function createAdapters(): AgentAdapter[] {
     new ZCodeAdapter(),
     new QoderAdapter(),
     new TraeAdapter(),
+    new AntigravityAdapter(),
     new CodeBuddyAdapter(),
     new WorkBuddyAdapter(),
     new OpenCodeAdapter(),

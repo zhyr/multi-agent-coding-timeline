@@ -128,7 +128,7 @@ aitimeline scan \
 ```
 
 Reads agent data from well-known local locations (for example `~/.codex`, `~/.cursor`,
-`~/.qoder`, `~/.trae`, `~/.trae-cn`, `~/.workbuddy`) and the project's Git history. Only sessions whose
+`~/.qoder`, `~/.trae`, `~/.trae-cn`, `~/.workbuddy`, `~/.gemini/antigravity-ide`) and the project's Git history. Only sessions whose
 project evidence matches the target project are included; weaker matches are reported as
 `candidate` and excluded by default.
 
@@ -232,6 +232,7 @@ sources/workbuddy-sessions.jsonl # present when WorkBuddy transcripts are scanne
 reports/scan-report.json        # present for scans
 reports/merge-report.json       # present for merges
 reports/cursor-audit.json       # present when a modern Cursor global DB is scanned
+reports/unsupported-inventory.json # present when encrypted/unsupported agent data is found
 reports/conflicts.jsonl
 integrity/checksums.sha256
 ```
@@ -253,9 +254,10 @@ Every event carries `evidence.level` — `verified`, `agent_reported`, `inferred
   exists on a remote-tracking ref with a configured remote; a remote-tracking ref alone is
   `inferred`. Commit messages never count as push evidence.
 - "Task complete" messages from an agent are `agent_reported`, never upgraded.
-- WorkBuddy audit-log session starts, Trae memory summaries and Cursor transcript ordering
-  are explicitly `inferred`/`agent_reported`, with notes. WorkBuddy transcript session
-  starts come from a native `session-meta` record and stay `verified`.
+- WorkBuddy audit-log session starts, Trae memory summaries, Antigravity brain artifacts and
+  Cursor transcript ordering are explicitly `inferred`/`agent_reported`, with notes.
+  WorkBuddy transcript session starts come from a native `session-meta` record and stay
+  `verified`; an Antigravity walkthrough is a reported completion, never a verified one.
 - Candidate project matches are excluded by default and labelled when included. An ancestor
   `cwd` is a candidate, not a strong project match.
 - Conflicting versions of the same source record are never discarded; both are kept and
@@ -274,6 +276,7 @@ boundary, incremental and error handling verified. Levels describe evidence, not
 | `cursor` | 3 | partially verified | 2,528 | 737,261 verified `tool_use` events; transcript rows carry no timestamps (SQLite session starts do); modern desktop Composer bodies are read read-only from `globalStorage/state.vscdb` with a per-composer index and audit report; `agentKv` artifacts are inventoried, not copied |
 | `qoder` | 3 | verified | 8 | cwd/gitBranch/timestamps/tool blocks |
 | `trae` | 2 | partially verified | 57 | memory summaries from `~/.trae` and `~/.trae-cn`; all events agent-reported |
+| `antigravity` | 2 | partially verified | 51 | plaintext brain artifacts (`task`/`implementation_plan`/`walkthrough`) per conversation; walkthrough is agent-reported completion; encrypted `conversations/*.pb` and `implicit/*.pb` are inventoried, not parsed; project identity is usually unavailable |
 | `workbuddy` | 2 | verified | 38 | conversation transcripts with messages/reasoning/tool pairs plus separate audit logs; snapshots indexed only |
 | `claude-code` | 1 | not testable | 0 | no local `~/.claude/projects`; synthetic fixtures only |
 | `codebuddy` | 0 | discovery only | 0 | directory observed, no verified session format |
@@ -313,6 +316,12 @@ performed separately, read-only; the counts in the table above come from that ru
 - Claude Code and ZCode have no locally verified parser; they are not claimed as supported.
   CodeBuddy is discovery-only. OpenCode is verified for sessions/messages/text, but its tool
   and file-change records have not been observed.
+- Antigravity conversation blobs (`conversations/*.pb`, `implicit/*.pb`, `user_settings.pb`)
+  are encrypted, and Trae SOLO / Trae CN `ModularData/ai-agent/database.db` files are
+  encrypted or have no verified schema. These are listed with sizes in
+  `reports/unsupported-inventory.json`; their contents are never read or decrypted.
+  Antigravity project identity comes only from `conversation_summaries.db`, which is often
+  empty, so sessions may remain candidate-only.
 - Al-exporter archives are import-only: a thread's `meta.project` is a path heuristic and is
   ignored, `meta.created_at` is a file mtime and is never used as event time, and imported
   events are `agent_reported`/`derived` with no Git evidence. Schema 1.0.0 and 1.1.0 are both
@@ -421,7 +430,7 @@ aitimeline scan \
 ```
 
 工具会从本地常见目录读取 Agent 数据（例如 `~/.codex`、`~/.cursor`、`~/.qoder`、
-`~/.trae`、`~/.trae-cn`、`~/.workbuddy`），并读取目标项目的 Git 历史。只有项目证据能够匹配目标项目的
+`~/.trae`、`~/.trae-cn`、`~/.workbuddy`、`~/.gemini/antigravity-ide`），并读取目标项目的 Git 历史。只有项目证据能够匹配目标项目的
 会话才会进入正式时间线；证据较弱的匹配会标记为 `candidate`，默认不纳入。
 
 ### 2. 跨设备源扫描（模式 B）
@@ -522,6 +531,7 @@ sources/workbuddy-sessions.jsonl # 扫描到 WorkBuddy 对话转录时存在
 reports/scan-report.json        # 扫描产物中存在
 reports/merge-report.json       # 合并产物中存在
 reports/cursor-audit.json       # 扫描到现代 Cursor 全局库时存在
+reports/unsupported-inventory.json # 发现加密/未支持数据时存在
 reports/conflicts.jsonl
 integrity/checksums.sha256
 ```
@@ -542,9 +552,10 @@ integrity/checksums.sha256
   `update by push` 记录时才是 `verified`，仅有远端跟踪引用只能是 `inferred`。commit message
   不会被当作推送证据。
 - Agent 自称的“任务完成”一律标记为 `agent_reported`，不会被提升等级。
-- WorkBuddy 的 audit-log 会话开始时间、Trae 的记忆摘要、Cursor 转录顺序，明确标注为
-  `inferred`/`agent_reported`，并附说明；WorkBuddy 对话转录的会话开始来自原生
-  `session-meta` 记录，保持 `verified`。
+- WorkBuddy 的 audit-log 会话开始时间、Trae 的记忆摘要、Antigravity 的 brain 产物、
+  Cursor 转录顺序，明确标注为 `inferred`/`agent_reported`，并附说明；WorkBuddy 对话转录的会话开始来自原生
+  `session-meta` 记录，保持 `verified`；Antigravity 的 walkthrough 只是 agent 报告的完成，不会升级为
+  已验证。
 - 仅达到候选级别的项目匹配默认排除；被纳入时会明确标注。祖先目录形式的 `cwd` 只算候选。
 - 同一条源记录出现冲突版本时不会丢弃任何一方，两者都会保留并写入
   `reports/conflicts.jsonl`。导入记录被折叠进原生事件时，其来源引用会嵌入
@@ -561,6 +572,7 @@ integrity/checksums.sha256
 | `cursor` | 3 | partially verified | 2,528 | 实测 737,261 条已验证的 `tool_use` 事件；转录记录无时间戳（SQLite 会话开始记录有时间戳）；现代桌面 Composer 正文从 `globalStorage/state.vscdb` 只读解析，并生成逐 Composer 索引与审计报告；`agentKv` 产物只盘点、不复制 |
 | `qoder` | 3 | verified | 8 | 提供 cwd/gitBranch/时间戳/工具块 |
 | `trae` | 2 | partially verified | 57 | 来自 `~/.trae` 与 `~/.trae-cn` 的记忆摘要；全部事件为 agent-reported |
+| `antigravity` | 2 | partially verified | 51 | 按会话读取明文 brain 产物（`task`/`implementation_plan`/`walkthrough`）；walkthrough 记为 agent-reported 完成；加密的 `conversations/*.pb` 与 `implicit/*.pb` 只盘点、不解析；项目身份通常不可得 |
 | `workbuddy` | 2 | verified | 38 | 对话转录含消息/推理/工具配对，安全审计日志另行解析；快照只索引 |
 | `claude-code` | 1 | not testable | 0 | 本机无 `~/.claude/projects`，仅用合成样本测试 |
 | `codebuddy` | 0 | discovery only | 0 | 只观察到目录，未验证会话格式 |
@@ -594,6 +606,11 @@ npm run verify      # typecheck + 测试 + 构建
 - Cursor 的转录记录没有时间戳，因此其 `occurred_at` 为空，排序时回退到 `observed_at`。
 - Claude Code、ZCode 在本机没有经过验证的解析器，因此不宣称已支持；CodeBuddy 仅做到目录发现。
   OpenCode 已验证会话/消息/文本解析，但其工具调用与文件变更记录尚未观察到。
+- Antigravity 的对话载荷（`conversations/*.pb`、`implicit/*.pb`、`user_settings.pb`）是加密的，
+  Trae SOLO / Trae CN 的 `ModularData/ai-agent/database.db` 也是加密或缺少已验证表结构。
+  这些文件只登记路径、大小与 16 字节头部到 `reports/unsupported-inventory.json`，绝不读取或解密
+  正文。Antigravity 的项目身份只来自 `conversation_summaries.db`，而该库经常为空，因此会话可能
+  只能停留在候选状态。
 - Al-exporter 归档只支持导入：`meta.project` 是路径启发式字段，会被忽略；`meta.created_at`
   是文件 mtime，绝不作为事件时间；导入事件只能是 `agent_reported`/`derived`，不含 Git
   证据。兼容 schema 1.0.0 与 1.1.0：1.1.0 直接使用 `session.native_id`（不再反推路径），
