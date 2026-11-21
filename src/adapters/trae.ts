@@ -12,33 +12,38 @@ import {
 } from './types.js';
 
 /**
- * Trae Work. Verified against local data (2026-11-17):
+ * Trae / Trae CN. Verified against local data (2026-11-21):
  *   ~/.trae/memory/projects/<encoded>/YYYYMMDD/session_memory_*.jsonl
+ *   ~/.trae-cn/memory/projects/<encoded>--p2-<hash>/YYYYMMDD/session_memory_*.jsonl
  *   { actions, intent, learned, message_id, message_summary_time, outcome }
  * These are memory summaries, not execution traces. Everything derived from
- * them is marked agent_reported / inferred.
+ * them is marked agent_reported / inferred. Trae CN appends a workspace
+ * partition suffix to the encoded project directory; it is not part of the path.
  */
 const SPEC: DiscoverySpec = {
   agentId: 'trae',
-  defaultDirs: ['~/.trae'],
+  defaultDirs: ['~/.trae', '~/.trae-cn'],
   markers: ['memory', 'work', 'worktrees'],
-  childNames: ['.trae', 'trae', 'Trae'],
+  childNames: ['.trae', '.trae-cn', 'trae', 'Trae'],
   format: 'jsonl',
 };
+
+const CN_SUFFIX_RE = /--p\d+-[A-Za-z0-9]+$/i;
 
 function evidenceFromPath(relative: string): ProjectEvidence {
   const parts = relative.split('/');
   const encoded = parts.length >= 3 ? parts[2]! : '';
+  const projectDir = encoded.replace(CN_SUFFIX_RE, '');
   return {
-    projectPathHints: encoded ? [decodeProjectPath(encoded)] : [],
-    metadata: { encoded_project_dir: encoded },
+    projectPathHints: projectDir ? [decodeProjectPath(projectDir)] : [],
+    metadata: { encoded_project_dir: projectDir },
   };
 }
 
 export class TraeAdapter implements AgentAdapter {
   readonly id = 'trae';
   readonly name = 'Trae Work';
-  readonly version = '1.0.0';
+  readonly version = '1.1.0';
 
   async discoverSources(options: DiscoverOptions = {}): Promise<AgentSource[]> {
     return discoverSources(SPEC, options);
@@ -119,10 +124,10 @@ export class TraeAdapter implements AgentAdapter {
       formats: ['jsonl'],
       verification: 'partially_verified',
       notes: [
-        'Real local format observed: ~/.trae/memory/projects/<encoded>/YYYYMMDD/session_memory_*.jsonl.',
+        'Real local format observed: ~/.trae/memory/projects/<encoded>/YYYYMMDD/session_memory_*.jsonl and ~/.trae-cn/memory/projects/<encoded>--p2-<hash>/YYYYMMDD/session_memory_*.jsonl.',
         'Records are memory summaries (intent/outcome/actions/learned), not raw conversation or tool traces.',
         'All emitted events are agent_reported; no completion is treated as verified.',
-        'Encoded project directory is heuristic evidence only.',
+        'Encoded project directory is heuristic evidence only; the Trae CN --p2-<hash> partition suffix is stripped before decoding.',
       ],
     });
   }

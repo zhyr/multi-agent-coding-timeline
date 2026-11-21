@@ -393,6 +393,25 @@ describe('WorkBuddy / TRAE adapters (partial formats)', () => {
     expect(result.records[0]!.evidence_level).toBe('agent_reported');
   });
 
+  it('discovers Trae CN memory summaries and strips the CN partition suffix', async () => {
+    const cnRoot = await tempDir('aitimeline-trae-cn-');
+    const relative =
+      'memory/projects/-Users-zhyr-work-DocCraft--p2-6d3ef11d408351d3a4bc/20261107/session_memory_cn.jsonl';
+    await writeTraeMemory(path.join(cnRoot, relative));
+    const adapter = new TraeAdapter();
+    const sessions = await adapter.scanSessions({
+      ...sourceFor('trae'),
+      source_id: 'trae-cn-fixture',
+      root: cnRoot,
+    });
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]!.project_evidence.projectPathHints).toEqual(['/Users/zhyr/work/DocCraft']);
+    const result = await adapter.parseSession(sessions[0]!);
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]!.evidence_level).toBe('agent_reported');
+    expect(result.project_evidence?.projectPathHints).toEqual(['/Users/zhyr/work/DocCraft']);
+  });
+
   it('parses WorkBuddy conversation transcripts with reasoning, tools and cwd', async () => {
     const relative = 'projects/encoded/74d80a47-d27c-4006-857f-e9c044edd5a9.jsonl';
     await writeWorkBuddyTranscript(path.join(root, relative));

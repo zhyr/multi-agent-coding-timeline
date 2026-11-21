@@ -128,7 +128,7 @@ aitimeline scan \
 ```
 
 Reads agent data from well-known local locations (for example `~/.codex`, `~/.cursor`,
-`~/.qoder`, `~/.trae`, `~/.workbuddy`) and the project's Git history. Only sessions whose
+`~/.qoder`, `~/.trae`, `~/.trae-cn`, `~/.workbuddy`) and the project's Git history. Only sessions whose
 project evidence matches the target project are included; weaker matches are reported as
 `candidate` and excluded by default.
 
@@ -273,7 +273,7 @@ boundary, incremental and error handling verified. Levels describe evidence, not
 | `codex` | 3 | verified | 214 | JSONL + zstd, `input_text`/`output_text` bodies, `environment_context` filtered; `cwd` is a path hint so project identity is `partial`; tool calls partial |
 | `cursor` | 3 | partially verified | 2,528 | 737,261 verified `tool_use` events; transcript rows carry no timestamps (SQLite session starts do); modern desktop Composer bodies are read read-only from `globalStorage/state.vscdb` with a per-composer index and audit report; `agentKv` artifacts are inventoried, not copied |
 | `qoder` | 3 | verified | 8 | cwd/gitBranch/timestamps/tool blocks |
-| `trae` | 2 | partially verified | 1 | memory summaries only; all events agent-reported |
+| `trae` | 2 | partially verified | 57 | memory summaries from `~/.trae` and `~/.trae-cn`; all events agent-reported |
 | `workbuddy` | 2 | verified | 38 | conversation transcripts with messages/reasoning/tool pairs plus separate audit logs; snapshots indexed only |
 | `claude-code` | 1 | not testable | 0 | no local `~/.claude/projects`; synthetic fixtures only |
 | `codebuddy` | 0 | discovery only | 0 | directory observed, no verified session format |
@@ -421,7 +421,7 @@ aitimeline scan \
 ```
 
 工具会从本地常见目录读取 Agent 数据（例如 `~/.codex`、`~/.cursor`、`~/.qoder`、
-`~/.trae`、`~/.workbuddy`），并读取目标项目的 Git 历史。只有项目证据能够匹配目标项目的
+`~/.trae`、`~/.trae-cn`、`~/.workbuddy`），并读取目标项目的 Git 历史。只有项目证据能够匹配目标项目的
 会话才会进入正式时间线；证据较弱的匹配会标记为 `candidate`，默认不纳入。
 
 ### 2. 跨设备源扫描（模式 B）
@@ -560,7 +560,7 @@ integrity/checksums.sha256
 | `codex` | 3 | verified | 214 | JSONL + zstd，解析 `input_text`/`output_text` 正文并过滤 `<environment_context>`；`cwd` 只是路径线索，项目识别为部分支持；工具调用部分支持 |
 | `cursor` | 3 | partially verified | 2,528 | 实测 737,261 条已验证的 `tool_use` 事件；转录记录无时间戳（SQLite 会话开始记录有时间戳）；现代桌面 Composer 正文从 `globalStorage/state.vscdb` 只读解析，并生成逐 Composer 索引与审计报告；`agentKv` 产物只盘点、不复制 |
 | `qoder` | 3 | verified | 8 | 提供 cwd/gitBranch/时间戳/工具块 |
-| `trae` | 2 | partially verified | 1 | 仅有记忆摘要；全部事件为 agent-reported |
+| `trae` | 2 | partially verified | 57 | 来自 `~/.trae` 与 `~/.trae-cn` 的记忆摘要；全部事件为 agent-reported |
 | `workbuddy` | 2 | verified | 38 | 对话转录含消息/推理/工具配对，安全审计日志另行解析；快照只索引 |
 | `claude-code` | 1 | not testable | 0 | 本机无 `~/.claude/projects`，仅用合成样本测试 |
 | `codebuddy` | 0 | discovery only | 0 | 只观察到目录，未验证会话格式 |
