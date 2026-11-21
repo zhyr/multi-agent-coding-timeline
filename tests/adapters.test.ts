@@ -19,6 +19,7 @@ import {
   writeQoderSession,
   writeCursorTranscript,
   writeWorkBuddyAudit,
+  writeWorkBuddyTranscript,
   writeTraeMemory,
   writeJsonl,
 } from './helpers/fixtures.js';
@@ -390,6 +391,72 @@ describe('WorkBuddy / TRAE adapters (partial formats)', () => {
     const result = await new TraeAdapter().parseSession(sessionFor(relative, 'trae'));
     expect(result.records).toHaveLength(1);
     expect(result.records[0]!.evidence_level).toBe('agent_reported');
+  });
+
+  it('parses WorkBuddy conversation transcripts with reasoning, tools and cwd', async () => {
+    const relative = 'projects/encoded/74d80a47-d27c-4006-857f-e9c044edd5a9.jsonl';
+    await writeWorkBuddyTranscript(path.join(root, relative));
+    const adapter = new WorkBuddyAdapter();
+    const result = await adapter.parseSession(sessionFor(relative, 'workbuddy'));
+
+    expect(result.issues).toEqual([]);
+    expect(result.records.map((r) => r.event_type)).toEqual([
+      'agent.session.started',
+      'agent.user_request.submitted',
+      'agent.message.recorded',
+      'agent.response.received',
+      'agent.tool.started',
+      'agent.tool.completed',
+    ]);
+    expect(result.project_evidence?.cwd).toBe(CWD);
+    expect(result.model).toBe('fixture-model');
+    const reasoning = result.records.find((r) => r.event_type === 'agent.message.recorded');
+    expect(reasoning?.content).toContain('resolve the workbook');
+    const tool = result.records.find((r) => r.event_type === 'agent.tool.started');
+    expect(tool?.tool_name).toBe('read_table');
+    expect(tool?.tool_call_id).toBe('call-1');
+
+    const supplemental = adapter.supplementalFiles();
+    expect(supplemental).toHaveLength(1);
+    expect(supplemental[0]!.path).toBe('sources/workbuddy-sessions.jsonl');
+    const rows = supplemental[0]!.content as Array<Record<string, unknown>>;
+    expect(rows[0]!.title).toBe('Fixture WorkBuddy session');
+    expect(rows[0]!.counts).toMatchObject({
+      'session-meta': 1,
+      message: 2,
+      reasoning: 1,
+      function_call: 1,
+      'function_call_result': 1,
+      'file-history-snapshot': 1,
+      'credit-usage': 1,
+    });
+  });
+
+  it('maps a failed WorkBuddy tool result to agent.tool.failed', async () => {
+    const relative = 'projects/encoded/11111111-2222-4333-8444-555555555555.jsonl';
+    await writeJsonl(path.join(root, relative), [
+      { type: 'function_call', id: 'wb-f1', timestamp: 1794778992000, name: 'write_cell', callId: 'call-f', arguments: {} },
+      { type: 'function_call_result', id: 'wb-f2', timestamp: 1794778992001, name: 'write_cell', callId: 'call-f', status: 'failed', output: 'denied' },
+    ]);
+    const result = await new WorkBuddyAdapter().parseSession(sessionFor(relative, 'workbuddy'));
+    expect(result.records.map((r) => r.event_type)).toEqual(['agent.tool.started', 'agent.tool.failed']);
+    expect(result.records[1]!.execution_status).toBe('failed');
+  });
+
+  it('discovers WorkBuddy transcripts and audit logs as separate session kinds', async () => {
+    const isolated = await tempDir('aitimeline-workbuddy-');
+    await mkdir(path.join(isolated, 'projects/encoded'), { recursive: true });
+    await mkdir(path.join(isolated, 'audit-log'), { recursive: true });
+    const transcript = 'projects/encoded/74d80a47-d27c-4006-857f-e9c044edd5a9.jsonl';
+    await writeWorkBuddyTranscript(path.join(isolated, transcript));
+    await writeWorkBuddyAudit(path.join(isolated, 'audit-log/2026-11-17.jsonl'));
+
+    const adapter = new WorkBuddyAdapter();
+    const sessions = await adapter.scanSessions({ ...sourceFor('workbuddy'), root: isolated, display_path: isolated });
+    expect(sessions.map((s) => s.metadata?.kind).sort()).toEqual([
+      'workbuddy-audit',
+      'workbuddy-transcript',
+    ]);
   });
 });
 

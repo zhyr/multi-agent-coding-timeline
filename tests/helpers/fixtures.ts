@@ -146,6 +146,51 @@ export async function writeWorkBuddyAudit(target: string): Promise<void> {
   ]);
 }
 
+/** Observed WorkBuddy conversation transcript shape (projects/<cwd>/<uuid>.jsonl). */
+export async function writeWorkBuddyTranscript(target: string): Promise<void> {
+  const sessionId = '74d80a47-d27c-4006-857f-e9c044edd5a9';
+  const cwd = '/tmp/fixture-project';
+  const at = (offset: number) => 1794778991000 + offset;
+  await writeJsonl(target, [
+    { type: 'session-meta', id: 'wb-e1', sessionId, timestamp: at(0) },
+    {
+      type: 'ai-title', id: 'wb-e2', sessionId, timestamp: at(1),
+      aiTitle: 'Fixture WorkBuddy session', cwd,
+    },
+    {
+      type: 'message', id: 'wb-e3', sessionId, timestamp: at(2),
+      role: 'user', cwd,
+      content: [{ type: 'input_text', text: 'Please update the ledger' }],
+    },
+    {
+      type: 'reasoning', id: 'wb-e4', sessionId, timestamp: at(3),
+      cwd, content: [],
+      rawContent: [{ type: 'reasoning_text', text: 'First resolve the workbook.' }],
+    },
+    {
+      type: 'message', id: 'wb-e5', sessionId, timestamp: at(4),
+      role: 'assistant', cwd,
+      providerData: { model: 'fixture-model' },
+      content: [{ type: 'output_text', text: 'Ledger updated.' }],
+    },
+    {
+      type: 'function_call', id: 'wb-e6', sessionId, timestamp: at(5),
+      cwd, name: 'read_table', callId: 'call-1',
+      arguments: { sheet_id: '000001' },
+    },
+    {
+      type: 'function_call_result', id: 'wb-e7', sessionId, timestamp: at(6),
+      cwd, name: 'read_table', callId: 'call-1', status: 'completed',
+      output: { type: 'text', text: 'ok' },
+    },
+    {
+      type: 'file-history-snapshot', timestamp: at(7), cwd,
+      messageId: 'wb-e5', snapshot: { trackedFileBackups: { 'src/a.ts': {} } },
+    },
+    { type: 'credit-usage', id: 'wb-e8', sessionId, timestamp: at(8), cwd },
+  ]);
+}
+
 export async function writeTraeMemory(target: string): Promise<void> {
   await writeJsonl(target, [
     {

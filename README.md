@@ -228,6 +228,7 @@ git/pushes.jsonl
 sources/source-index.jsonl
 sources/scan-inputs.json        # present for scans
 sources/cursor-composer-index.jsonl  # present when a modern Cursor global DB is scanned
+sources/workbuddy-sessions.jsonl # present when WorkBuddy transcripts are scanned
 reports/scan-report.json        # present for scans
 reports/merge-report.json       # present for merges
 reports/cursor-audit.json       # present when a modern Cursor global DB is scanned
@@ -252,8 +253,9 @@ Every event carries `evidence.level` — `verified`, `agent_reported`, `inferred
   exists on a remote-tracking ref with a configured remote; a remote-tracking ref alone is
   `inferred`. Commit messages never count as push evidence.
 - "Task complete" messages from an agent are `agent_reported`, never upgraded.
-- WorkBuddy session starts, Trae memory summaries and Cursor transcript ordering are
-  explicitly `inferred`/`agent_reported`, with notes.
+- WorkBuddy audit-log session starts, Trae memory summaries and Cursor transcript ordering
+  are explicitly `inferred`/`agent_reported`, with notes. WorkBuddy transcript session
+  starts come from a native `session-meta` record and stay `verified`.
 - Candidate project matches are excluded by default and labelled when included. An ancestor
   `cwd` is a candidate, not a strong project match.
 - Conflicting versions of the same source record are never discarded; both are kept and
@@ -272,7 +274,7 @@ boundary, incremental and error handling verified. Levels describe evidence, not
 | `cursor` | 3 | partially verified | 2,528 | 737,261 verified `tool_use` events; transcript rows carry no timestamps (SQLite session starts do); modern desktop Composer bodies are read read-only from `globalStorage/state.vscdb` with a per-composer index and audit report; `agentKv` artifacts are inventoried, not copied |
 | `qoder` | 3 | verified | 8 | cwd/gitBranch/timestamps/tool blocks |
 | `trae` | 2 | partially verified | 1 | memory summaries only; all events agent-reported |
-| `workbuddy` | 2 | partially verified | 10 | security audit events, no conversation transcripts |
+| `workbuddy` | 2 | verified | 38 | conversation transcripts with messages/reasoning/tool pairs plus separate audit logs; snapshots indexed only |
 | `claude-code` | 1 | not testable | 0 | no local `~/.claude/projects`; synthetic fixtures only |
 | `codebuddy` | 0 | discovery only | 0 | directory observed, no verified session format |
 | `zcode` | 0 | not testable | 0 | no local installation |
@@ -516,6 +518,7 @@ git/pushes.jsonl
 sources/source-index.jsonl
 sources/scan-inputs.json        # 扫描产物中存在
 sources/cursor-composer-index.jsonl  # 扫描到现代 Cursor 全局库时存在
+sources/workbuddy-sessions.jsonl # 扫描到 WorkBuddy 对话转录时存在
 reports/scan-report.json        # 扫描产物中存在
 reports/merge-report.json       # 合并产物中存在
 reports/cursor-audit.json       # 扫描到现代 Cursor 全局库时存在
@@ -539,8 +542,9 @@ integrity/checksums.sha256
   `update by push` 记录时才是 `verified`，仅有远端跟踪引用只能是 `inferred`。commit message
   不会被当作推送证据。
 - Agent 自称的“任务完成”一律标记为 `agent_reported`，不会被提升等级。
-- WorkBuddy 的会话开始时间、Trae 的记忆摘要、Cursor 转录顺序，明确标注为
-  `inferred`/`agent_reported`，并附说明。
+- WorkBuddy 的 audit-log 会话开始时间、Trae 的记忆摘要、Cursor 转录顺序，明确标注为
+  `inferred`/`agent_reported`，并附说明；WorkBuddy 对话转录的会话开始来自原生
+  `session-meta` 记录，保持 `verified`。
 - 仅达到候选级别的项目匹配默认排除；被纳入时会明确标注。祖先目录形式的 `cwd` 只算候选。
 - 同一条源记录出现冲突版本时不会丢弃任何一方，两者都会保留并写入
   `reports/conflicts.jsonl`。导入记录被折叠进原生事件时，其来源引用会嵌入
@@ -557,7 +561,7 @@ integrity/checksums.sha256
 | `cursor` | 3 | partially verified | 2,528 | 实测 737,261 条已验证的 `tool_use` 事件；转录记录无时间戳（SQLite 会话开始记录有时间戳）；现代桌面 Composer 正文从 `globalStorage/state.vscdb` 只读解析，并生成逐 Composer 索引与审计报告；`agentKv` 产物只盘点、不复制 |
 | `qoder` | 3 | verified | 8 | 提供 cwd/gitBranch/时间戳/工具块 |
 | `trae` | 2 | partially verified | 1 | 仅有记忆摘要；全部事件为 agent-reported |
-| `workbuddy` | 2 | partially verified | 10 | 安全审计事件，无对话转录 |
+| `workbuddy` | 2 | verified | 38 | 对话转录含消息/推理/工具配对，安全审计日志另行解析；快照只索引 |
 | `claude-code` | 1 | not testable | 0 | 本机无 `~/.claude/projects`，仅用合成样本测试 |
 | `codebuddy` | 0 | discovery only | 0 | 只观察到目录，未验证会话格式 |
 | `zcode` | 0 | not testable | 0 | 本机未安装 |
